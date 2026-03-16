@@ -1,0 +1,41 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.vs/
+*.DotSettings.user
+publish/
+out/
+
+# React / Node
+web/node_modules/
+web/dist/
+web/build/
+web/.env.local
+web/.env.production
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+
+# Credentials — NEVER commit
+appsettings.Development.json
+appsettings.Production.json
+*.pfx
+*.key
