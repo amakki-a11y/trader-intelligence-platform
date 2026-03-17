@@ -1,0 +1,64 @@
+-- ============================================================================
+-- Trader Intelligence Platform — TimescaleDB Schema
+-- ============================================================================
+-- This file outlines the planned database schema for TIP v2.0.
+-- Tables will be created as TimescaleDB hypertables for time-series optimization.
+-- Uncomment and apply in Phase 1, Task 2.
+-- ============================================================================
+
+-- ── Ticks Hypertable ────────────────────────────────────────────────────────
+-- Stores raw tick data (bid/ask prices) for all subscribed symbols.
+-- Partitioned by time_msc for efficient range queries and automatic compression.
+-- Expected volume: ~100K rows/second during market hours.
+
+-- CREATE TABLE ticks (
+--     symbol       TEXT        NOT NULL,
+--     bid          DOUBLE PRECISION NOT NULL,
+--     ask          DOUBLE PRECISION NOT NULL,
+--     time_msc     BIGINT      NOT NULL,
+--     received_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+--     server       TEXT        NOT NULL
+-- );
+-- SELECT create_hypertable('ticks', by_range('time_msc', 86400000));
+-- CREATE INDEX idx_ticks_symbol ON ticks (symbol, time_msc DESC);
+
+-- ── Deals Hypertable ────────────────────────────────────────────────────────
+-- Stores all deal records from MT5 (trades, balance operations, bonuses).
+-- Primary source of truth for all analysis engines.
+-- Expected volume: ~100-1000 rows/second during market hours.
+
+-- CREATE TABLE deals (
+--     deal_id      BIGINT      NOT NULL,
+--     login        BIGINT      NOT NULL,
+--     time_msc     BIGINT      NOT NULL,
+--     symbol       TEXT        NOT NULL DEFAULT '',
+--     action       INTEGER     NOT NULL,
+--     volume       DOUBLE PRECISION NOT NULL,
+--     price        DOUBLE PRECISION NOT NULL,
+--     profit       DOUBLE PRECISION NOT NULL,
+--     commission   DOUBLE PRECISION NOT NULL,
+--     swap         DOUBLE PRECISION NOT NULL,
+--     fee          DOUBLE PRECISION NOT NULL,
+--     reason       INTEGER     NOT NULL,
+--     expert_id    BIGINT      NOT NULL DEFAULT 0,
+--     comment      TEXT        NOT NULL DEFAULT '',
+--     position_id  BIGINT      NOT NULL DEFAULT 0,
+--     received_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+--     server       TEXT        NOT NULL,
+--     UNIQUE (server, deal_id)
+-- );
+-- SELECT create_hypertable('deals', by_range('time_msc', 86400000));
+-- CREATE INDEX idx_deals_login ON deals (login, time_msc DESC);
+-- CREATE INDEX idx_deals_symbol ON deals (symbol, time_msc DESC);
+
+-- ── Sync State Table ────────────────────────────────────────────────────────
+-- Tracks synchronization checkpoints for catch-up sync after reconnection.
+-- Not a hypertable — small table with infrequent updates.
+
+-- CREATE TABLE sync_state (
+--     entity_type  TEXT        NOT NULL,
+--     entity_id    TEXT        NOT NULL,
+--     last_sync    TIMESTAMPTZ NOT NULL,
+--     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+--     PRIMARY KEY (entity_type, entity_id)
+-- );
