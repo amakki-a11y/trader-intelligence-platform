@@ -2,6 +2,8 @@
 
   <PropertyGroup>
     <OutputType>Library</OutputType>
+    <!-- Define MT5_API_AVAILABLE when native MetaQuotes DLLs are in Libs/ folder -->
+    <!-- <DefineConstants>MT5_API_AVAILABLE</DefineConstants> -->
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current state
-v2.0 in development — Phase 1 in progress (solution scaffolded, schema done, MT5 connector next).
+v2.0 in development — Phase 1 in progress (solution scaffolded, schema done, MT5 connector done, batch tick writer next).
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to the v1.0 RebateAbuseDetector.
@@ -36,7 +36,7 @@ TIP.Tests     → TIP.Connector, TIP.Core, TIP.Data
 ## Build Order
 1. [x] .NET 8 solution structure ✅ (completed 2026-03-16)
 2. [x] TimescaleDB schema ✅ (completed 2026-03-16)
-3. [ ] MT5 connection pipeline
+3. [x] MT5 Connector: CIMTDealSink + OnTick → Channel<T> ✅ (completed 2026-03-16)
 4. [ ] React dashboard
 5. [ ] AI engines (StyleClassifier, BookRouter, SimulationEngine)
 6. [ ] ML-based classification
@@ -77,3 +77,16 @@ TIP.Tests     → TIP.Connector, TIP.Core, TIP.Data
 - Retention: ticks dropped after 90 days, everything else permanent
 - Updated TIP.Data SQL templates
 - **Next up:** Phase 1, Task 3 — MT5 Connector (CIMTDealSink + OnTick)
+
+### Phase 1, Task 3: MT5 Connector — ✅ DONE (2026-03-16)
+- Created IMT5Api abstraction interface (7 methods + 3 events)
+- Created RawTypes.cs (RawDeal, RawTick, RawUser, RawSymbol)
+- Created MT5ApiSimulator — generates fake ticks (5 symbols, 200ms) and deals (1-5s) for dev/testing
+- Created MT5ApiReal.cs behind #if MT5_API_AVAILABLE (ready for native DLLs)
+- Updated MT5Connection.cs — full connect/subscribe/heartbeat/reconnect lifecycle
+- Updated HistoryFetcher.cs — rate-limited backfill via IMT5Api
+- Updated SyncStateTracker.cs — in-memory checkpoint tracking
+- Updated Program.cs — full DI wiring with simulator toggle ("UseSimulator": true)
+- 19 new unit tests (MT5Simulator: 12, DealSink: 7) — 31 total passing
+- `dotnet run` now starts and generates live simulated tick/deal data
+- **Next up:** Phase 1, Task 4 — Batch tick writer (Channel → TimescaleDB)

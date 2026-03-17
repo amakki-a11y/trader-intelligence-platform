@@ -1,13 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
 namespace TIP.Connector;
 
 /// <summary>
-/// Rate-limited historical data backfill from the MT5 Manager API.
+/// Rate-limited historical data backfill from the MT5 Manager API via IMT5Api.
 ///
 /// Design rationale:
 /// - MT5 Manager API has undocumented rate limits; hammering it with concurrent
@@ -21,6 +22,10 @@ namespace TIP.Connector;
 public sealed class HistoryFetcher : IDisposable
 {
     private readonly ILogger<HistoryFetcher> _logger;
+    private readonly IMT5Api _api;
+    private readonly ChannelWriter<DealEvent> _dealWriter;
+    private readonly ChannelWriter<TickEvent> _tickWriter;
+    private readonly SyncStateTracker _syncTracker;
     private readonly SemaphoreSlim _concurrencyLimiter = new(2, 2);
     private const int ChunkDelayMs = 500;
 
@@ -28,9 +33,22 @@ public sealed class HistoryFetcher : IDisposable
     /// Initializes the history fetcher with rate-limiting controls.
     /// </summary>
     /// <param name="logger">Logger for backfill progress tracking.</param>
-    public HistoryFetcher(ILogger<HistoryFetcher> logger)
+    /// <param name="api">MT5 API for requesting historical data.</param>
+    /// <param name="dealWriter">Channel writer for deal events loaded from history.</param>
+    /// <param name="tickWriter">Channel writer for tick events loaded from history.</param>
+    /// <param name="syncTracker">Sync state tracker for checkpoint lookups.</param>
+    public HistoryFetcher(
+        ILogger<HistoryFetcher> logger,
+        IMT5Api api,
+        ChannelWriter<DealEvent> dealWriter,
+        ChannelWriter<TickEvent> tickWriter,
+        SyncStateTracker syncTracker)
     {
         _logger = logger;
+        _api = api;
+        _dealWriter = dealWriter;
+        _tickWriter = tickWriter;
+        _syncTracker = syncTracker;
     }
 
     /// <summary>
@@ -59,11 +77,45 @@ public sealed class HistoryFetcher : IDisposable
             await _concurrencyLimiter.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                // TODO: Phase 2, Task 4 — Call IMTManagerAPI.DealRequest(login, cutoffTime, now)
-                // TODO: Phase 2, Task 4 — Iterate IMTDealArray, convert to DealEvent, add DealId to loadedDealIds
-                // TODO: Phase 2, Task 4 — Write loaded deals to DealRepository for persistence
+                // Check sync state for last checkpoint
+                var lastSync = _syncTracker.GetLastSyncTimestamp("deal_login", login.ToString());
+                var from = lastSync ?? cutoffTime;
+                var to = DateTimeOffset.UtcNow;
 
-                _logger.LogDebug("Backfilled deals for login {Login}", login);
+                var rawDeals = _api.RequestDeals(login, from, to);
+
+                foreach (var raw in rawDeals)
+                {
+                    loadedDealIds.Add(raw.DealId);
+
+                    var dealEvent = new DealEvent(
+                        DealId: raw.DealId,
+                        Login: raw.Login,
+                        TimeMsc: raw.TimeMsc,
+                        Symbol: raw.Symbol,
+                        Action: (int)raw.Action,
+                        Volume: raw.VolumeLots,
+                        Price: raw.Price,
+                        Profit: raw.Profit,
+                        Commission: raw.Commission,
+                        Swap: raw.Storage,
+                        Fee: raw.Fee,
+                        Reason: (int)raw.Reason,
+                        ExpertId: raw.ExpertId,
+                        Comment: raw.Comment,
+                        PositionId: raw.PositionId,
+                        ReceivedAt: DateTimeOffset.UtcNow);
+
+                    _dealWriter.TryWrite(dealEvent);
+                }
+
+                if (rawDeals.Count > 0)
+                {
+                    _syncTracker.UpdateCheckpoint("deal_login", login.ToString(), to);
+                }
+
+                _logger.LogDebug(
+                    "Backfilled {Count} deals for login {Login}", rawDeals.Count, login);
             }
             finally
             {
@@ -100,10 +152,31 @@ public sealed class HistoryFetcher : IDisposable
             await _concurrencyLimiter.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                // TODO: Phase 2, Task 4 — Call IMTManagerAPI.TickHistoryRequest(symbol, cutoffTime, now)
-                // TODO: Phase 2, Task 4 — Convert ticks and write to TickWriter for persistence
+                var lastSync = _syncTracker.GetLastSyncTimestamp("tick_symbol", symbol);
+                var from = lastSync ?? cutoffTime;
+                var to = DateTimeOffset.UtcNow;
 
-                _logger.LogDebug("Backfilled ticks for symbol {Symbol}", symbol);
+                var rawTicks = _api.RequestTicks(symbol, from, to);
+
+                foreach (var raw in rawTicks)
+                {
+                    var tickEvent = new TickEvent(
+                        Symbol: raw.Symbol,
+                        Bid: raw.Bid,
+                        Ask: raw.Ask,
+                        TimeMsc: raw.TimeMsc,
+                        ReceivedAt: DateTimeOffset.UtcNow);
+
+                    _tickWriter.TryWrite(tickEvent);
+                }
+
+                if (rawTicks.Count > 0)
+                {
+                    _syncTracker.UpdateCheckpoint("tick_symbol", symbol, to);
+                }
+
+                _logger.LogDebug(
+                    "Backfilled {Count} ticks for symbol {Symbol}", rawTicks.Count, symbol);
             }
             finally
             {
