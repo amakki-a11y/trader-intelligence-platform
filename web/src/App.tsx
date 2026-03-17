@@ -445,7 +445,35 @@ function AccountDetail({ account, version, onBack }: { account: Account; version
       .catch(() => {});
   }, [account.login, dateFrom, dateTo]);
 
-  const openTrades: OpenTrade[] = [];
+  const [openTrades, setOpenTrades] = useState<OpenTrade[]>([]);
+
+  // Fetch open positions from MT5
+  useEffect(() => {
+    const fetchPositions = async () => {
+      try {
+        const res = await fetch(`/api/accounts/${account.login}/positions`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!Array.isArray(data)) return;
+        setOpenTrades(data.map((p: any) => ({
+          ticket: p.positionId,
+          time: p.time,
+          symbol: p.symbol ?? "",
+          action: p.action ?? "BUY",
+          volume: p.volume ?? 0,
+          openPrice: p.priceOpen ?? 0,
+          currentPrice: p.priceCurrent ?? 0,
+          profit: p.profit ?? 0,
+          swap: p.swap ?? 0,
+          sl: p.sl ?? 0,
+          tp: p.tp ?? 0,
+        })));
+      } catch { /* ignore */ }
+    };
+    fetchPositions();
+    const interval = setInterval(fetchPositions, 5000);
+    return () => clearInterval(interval);
+  }, [account.login]);
 
   const moneyOps = useMemo((): MoneyOp[] => {
     return deals
@@ -1272,9 +1300,8 @@ export default function App() {
   const [accounts, setAccounts] = useState<Account[]>(() => generateAccounts(20));
   const connectionStatus = useConnectionStatus();
 
-  // Fetch real accounts from API when connected
+  // Fetch real accounts from API (always poll — show real data when available)
   useEffect(() => {
-    if (!connectionStatus.connected) return;
     const fetchAccounts = async () => {
       try {
         const res = await fetch("/api/accounts");
@@ -1283,8 +1310,8 @@ export default function App() {
         if (!Array.isArray(data) || data.length === 0) return;
         const mapped: Account[] = data.map((a: any) => ({
           login: a.login,
-          name: a.login.toString(),
-          group: "",
+          name: a.name ?? a.login.toString(),
+          group: a.group ?? "",
           score: a.abuseScore ?? 0,
           sev: a.riskLevel === "Critical" ? "CRITICAL" : a.riskLevel === "High" ? "HIGH" : a.riskLevel === "Medium" ? "MEDIUM" : "LOW",
           deposits: 0,
@@ -1314,7 +1341,7 @@ export default function App() {
     fetchAccounts();
     const interval = setInterval(fetchAccounts, 5000);
     return () => clearInterval(interval);
-  }, [connectionStatus.connected]);
+  }, []);
 
   useEffect(() => {
     const critLogins = accounts.filter(a => a.sev === "CRITICAL").map(a => a.login);

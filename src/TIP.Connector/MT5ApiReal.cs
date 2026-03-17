@@ -226,6 +226,50 @@ public sealed class MT5ApiReal : IMT5Api
     }
 
     /// <inheritdoc />
+    public List<RawPosition> GetPositions(ulong login)
+    {
+        var result = new List<RawPosition>();
+        if (_manager == null) return result;
+
+        var posArray = _manager.PositionCreateArray();
+        if (posArray == null) return result;
+
+        var res = _manager.PositionGet(login, posArray);
+        if (res != MTRetCode.MT_RET_OK)
+        {
+            posArray.Dispose();
+            return result;
+        }
+
+        for (uint i = 0; i < posArray.Total(); i++)
+        {
+            var pos = posArray.Next(i);
+            if (pos == null) continue;
+
+            result.Add(new RawPosition
+            {
+                PositionId = pos.Position(),
+                Login = pos.Login(),
+                Symbol = pos.Symbol(),
+                Action = pos.Action(),
+                Volume = pos.Volume() / 10000.0,
+                PriceOpen = pos.PriceOpen(),
+                PriceCurrent = pos.PriceCurrent(),
+                Profit = pos.Profit(),
+                Storage = pos.Storage(),
+                StopLoss = pos.PriceSL(),
+                TakeProfit = pos.PriceTP(),
+                TimeMsc = (long)pos.TimeCreate() * 1000,
+                ExpertId = (ulong)pos.ExpertID(),
+                Comment = pos.Comment()
+            });
+        }
+
+        posArray.Dispose();
+        return result;
+    }
+
+    /// <inheritdoc />
     public List<RawSymbol> GetSymbols()
     {
         var result = new List<RawSymbol>();

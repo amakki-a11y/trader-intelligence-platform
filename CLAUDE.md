@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current state
-v2.0 in development — Phases 1-4 complete (infrastructure, pipeline, compute engines, React dashboard all done). Phase 5 next.
+v2.0 in development — Phases 1-4 complete + real MT5 integration tested. Dashboard displays live data from MT5 server. Phase 5 next.
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to the v1.0 RebateAbuseDetector.
@@ -162,3 +162,18 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 - `dotnet build` — zero warnings, zero errors
 - **Phases 1-4 COMPLETE.**
 - **Next up:** Phase 5 — AI engines (StyleClassifier, BookRouter, SimulationEngine)
+
+### Phase 4.5: Real MT5 Integration — ✅ DONE (2026-03-17)
+- **MT5 Connection**: Connected to real MT5 server (89.21.67.56:443), auto-connects on startup via appsettings.json
+- **Real Tick Subscription**: Added CIMTTickSink handler in MT5ApiReal for live price streaming
+- **Pipeline Fixes**: GetUserLogins retry loop (5 attempts, 2s delay) for pump sync, skipped tick backfill (no historical tick API), HistoryFetcher date range fix (cutoffTime.AddDays(-90))
+- **ConnectionManager Fix**: SetConnected fallback after StartPipeline completes, password guard ("CHANGE_ME") skips auto-connect
+- **Open Positions API**: Added IMT5Api.GetPositions(login) → MT5 PositionGet, RawPosition type, /api/accounts/{login}/positions endpoint
+- **Account Info API**: Added /api/accounts/{login}/info (balance, equity, leverage from MT5), /api/accounts/{login}/deals (real deal history)
+- **Account Enrichment**: /api/accounts now returns Name and Group from MT5 API lookup
+- **Frontend — Real Data**: Account Scanner fetches from /api/accounts (always polls, no connection guard), AccountDetail fetches balance/equity/leverage from /api/accounts/{login}/info, deal history from /api/accounts/{login}/deals, open positions from /api/accounts/{login}/positions
+- **Settings Page**: ConnectionManager with connect/disconnect, connection log, scan settings
+- **Debug Endpoint**: /api/settings/connection/debug for troubleshooting MT5 groups/logins
+- Tested with 2 real accounts (86672693 "Test", 86672696 "test") in group Test\Mak — 27 deals backfilled, open positions showing, real balance/equity displayed
+- `dotnet build` — zero warnings, zero errors
+- `npx tsc --noEmit` — zero errors

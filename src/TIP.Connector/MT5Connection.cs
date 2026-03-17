@@ -160,7 +160,12 @@ public sealed class MT5Connection : BackgroundService
 
                 await _orchestrator.StartPipeline(config, reconnectCts.Token).ConfigureAwait(false);
 
-                // Pipeline fully live — report live status with symbol count
+                // Pipeline fully live — ensure connected status is set (background task may have missed it)
+                if (!_connectionManager.IsConnected)
+                {
+                    var scopeLogins = _api.GetUserLogins(config.GroupMask);
+                    _connectionManager.SetConnected(config.ServerAddress, scopeLogins.Length);
+                }
                 _connectionManager.SetLive(_tickListener.CachedSymbolCount);
 
                 backoffMs = InitialBackoffMs; // Reset backoff on successful startup

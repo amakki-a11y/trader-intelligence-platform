@@ -45,13 +45,17 @@ public sealed class AnalyticsController : ControllerBase
     [HttpGet("accounts")]
     public IActionResult GetAccounts([FromQuery] string? risk = null)
     {
+        var api = HttpContext.RequestServices.GetService<TIP.Connector.IMT5Api>();
+
         if (!string.IsNullOrEmpty(risk) && Enum.TryParse<RiskLevel>(risk, true, out var level))
         {
             var filtered = _accountScorer.GetAccountsByRisk(level);
+            EnrichNames(filtered, api);
             return Ok(filtered.Select(MapAccount));
         }
 
         var accounts = _accountScorer.GetAllAccountsSorted();
+        EnrichNames(accounts, api);
         return Ok(accounts.Select(MapAccount));
     }
 
@@ -192,6 +196,36 @@ public sealed class AnalyticsController : ControllerBase
     }
 
     /// <summary>
+    /// GET /api/accounts/{login}/positions — Returns open positions from MT5 for a login.
+    /// </summary>
+    [HttpGet("accounts/{login}/positions")]
+    public IActionResult GetAccountPositions(ulong login)
+    {
+        var api = HttpContext.RequestServices.GetService<TIP.Connector.IMT5Api>();
+        if (api == null || !api.IsConnected)
+            return Ok(Array.Empty<object>());
+
+        var positions = api.GetPositions(login);
+        return Ok(positions.Select(p => new
+        {
+            positionId = p.PositionId,
+            login = p.Login,
+            symbol = p.Symbol,
+            action = p.Action == 0 ? "BUY" : "SELL",
+            volume = p.Volume,
+            priceOpen = p.PriceOpen,
+            priceCurrent = p.PriceCurrent,
+            profit = p.Profit,
+            swap = p.Storage,
+            sl = p.StopLoss,
+            tp = p.TakeProfit,
+            time = DateTimeOffset.FromUnixTimeMilliseconds(p.TimeMsc).ToString("o"),
+            expertId = p.ExpertId,
+            comment = p.Comment,
+        }));
+    }
+
+    /// <summary>
     /// GET /api/rings — Returns detected trading rings with member details.
     /// </summary>
     [HttpGet("rings")]
@@ -229,11 +263,29 @@ public sealed class AnalyticsController : ControllerBase
     }
 
     /// <summary>
+    /// Enriches account name/group from MT5 API if not already set.
+    /// </summary>
+    private static void EnrichNames(System.Collections.Generic.IReadOnlyList<AccountAnalysis> accounts, TIP.Connector.IMT5Api? api)
+    {
+        if (api == null || !api.IsConnected) return;
+        foreach (var a in accounts)
+        {
+            if (!string.IsNullOrEmpty(a.Name)) continue;
+            var user = api.GetUser(a.Login);
+            if (user == null) continue;
+            a.Name = user.Name;
+            a.Group = user.Group;
+        }
+    }
+
+    /// <summary>
     /// Maps AccountAnalysis to a summary DTO for the list endpoint.
     /// </summary>
     private static object MapAccount(AccountAnalysis a) => new
     {
         a.Login,
+        a.Name,
+        a.Group,
         a.AbuseScore,
         previousScore = a.PreviousScore,
         riskLevel = a.RiskLevel.ToString(),

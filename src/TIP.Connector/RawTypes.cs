@@ -108,6 +108,54 @@ public sealed record RawUser
 }
 
 /// <summary>
+/// Raw open position data from MT5 PositionGet.
+/// </summary>
+public sealed record RawPosition
+{
+    /// <summary>Position ticket.</summary>
+    public required ulong PositionId { get; init; }
+
+    /// <summary>Account login that owns this position.</summary>
+    public required ulong Login { get; init; }
+
+    /// <summary>Trading instrument symbol.</summary>
+    public required string Symbol { get; init; }
+
+    /// <summary>Position direction: 0=BUY, 1=SELL.</summary>
+    public required uint Action { get; init; }
+
+    /// <summary>Volume in standard lots.</summary>
+    public required double Volume { get; init; }
+
+    /// <summary>Open price.</summary>
+    public required double PriceOpen { get; init; }
+
+    /// <summary>Current price.</summary>
+    public required double PriceCurrent { get; init; }
+
+    /// <summary>Unrealized profit/loss.</summary>
+    public required double Profit { get; init; }
+
+    /// <summary>Swap/rollover charge.</summary>
+    public required double Storage { get; init; }
+
+    /// <summary>Stop loss level.</summary>
+    public required double StopLoss { get; init; }
+
+    /// <summary>Take profit level.</summary>
+    public required double TakeProfit { get; init; }
+
+    /// <summary>Position open time in milliseconds since Unix epoch.</summary>
+    public required long TimeMsc { get; init; }
+
+    /// <summary>Expert Advisor ID (magic number). 0 = manual trade.</summary>
+    public required ulong ExpertId { get; init; }
+
+    /// <summary>Free-text comment.</summary>
+    public required string Comment { get; init; }
+}
+
+/// <summary>
 /// Raw symbol specification from the MT5 server.
 /// </summary>
 public sealed record RawSymbol

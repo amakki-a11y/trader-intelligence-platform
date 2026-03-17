@@ -168,6 +168,9 @@ public sealed class MT5ApiSimulator : IMT5Api
     }
 
     /// <inheritdoc />
+    public List<RawPosition> GetPositions(ulong login) => new();
+
+    /// <inheritdoc />
     public List<RawSymbol> GetSymbols()
     {
         var result = new List<RawSymbol>();

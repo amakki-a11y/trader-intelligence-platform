@@ -112,6 +112,13 @@ public interface IMT5Api : IDisposable
     RawUser? GetUser(ulong login);
 
     /// <summary>
+    /// Gets open positions for a specific login from the MT5 server.
+    /// </summary>
+    /// <param name="login">Account login number.</param>
+    /// <returns>List of open positions, empty if none or not connected.</returns>
+    List<RawPosition> GetPositions(ulong login);
+
+    /// <summary>
     /// Gets all available trading symbols from the MT5 server.
     /// </summary>
     List<RawSymbol> GetSymbols();

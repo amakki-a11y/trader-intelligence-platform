@@ -131,8 +131,18 @@ public sealed class PipelineOrchestrator
             // Load sync state from DB if available
             await _syncTracker.LoadFromDatabase(ct).ConfigureAwait(false);
 
-            // Get all logins and symbols for backfill
-            var logins = _api.GetUserLogins(config.GroupMask);
+            // Get all logins — retry up to 5 times with 2s delay (pump needs time to sync user data)
+            ulong[] logins = Array.Empty<ulong>();
+            for (var attempt = 0; attempt < 5; attempt++)
+            {
+                logins = _api.GetUserLogins(config.GroupMask);
+                if (logins.Length > 0) break;
+                _logger.LogWarning(
+                    "GetUserLogins returned 0 (attempt {Attempt}/5) — waiting for pump sync...",
+                    attempt + 1);
+                await Task.Delay(2000, ct).ConfigureAwait(false);
+            }
+
             var symbols = _api.GetSymbols().Select(s => s.Symbol).ToList();
 
             _logger.LogInformation(
