@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current state
-v2.0 in development — Phase 1 complete (solution scaffolded, schema done, MT5 connector done, batch writers done). React dashboard next.
+v2.0 in development — Phases 1-4 complete (infrastructure, pipeline, compute engines, React dashboard all done). Phase 5 next.
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to the v1.0 RebateAbuseDetector.
@@ -38,9 +38,12 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 2. [x] TimescaleDB schema ✅ (completed 2026-03-16)
 3. [x] MT5 Connector: CIMTDealSink + OnTick → Channel<T> ✅ (completed 2026-03-16)
 4. [x] Batch tick/deal writers (Channel → TimescaleDB) ✅ (completed 2026-03-17)
-5. [ ] React dashboard
-6. [ ] AI engines (StyleClassifier, BookRouter, SimulationEngine)
-7. [ ] ML-based classification
+5. [x] Three-phase sync with buffer pattern ✅ (completed 2026-03-17)
+6. [x] Deal processing pipeline (DealProcessor + position tracking) ✅ (completed 2026-03-17)
+7. [x] Compute engines (P&L, Correlation, AccountScorer, Exposure, BotFingerprinter) ✅ (completed 2026-03-17)
+8. [x] React dashboard v2 + DealerHub WebSocket ✅ (rebuilt 2026-03-17)
+9. [ ] AI engines (StyleClassifier, BookRouter, SimulationEngine)
+10. [ ] ML-based classification
 
 ## Coding Rules
 1. .NET 8 target, nullable enabled, warnings as errors
@@ -103,4 +106,59 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 - Health endpoint now reports ticksIngested, tickFlushes, ticksBuffered, dbEnabled
 - 12 new unit tests (TickWriter: 8, TickWriterService: 2, DealWriterService: 2) — 43 total passing
 - `dotnet run` shows TickWriterService + DealWriterService started in logs
-- **Next up:** Phase 2 — React dashboard
+- **Next up:** Phase 1, Task 5 + Phase 2 — Pipeline Orchestration + Deal Processing
+
+### Phase 1, Task 5 + Phase 2: Pipeline Orchestration + Deal Processing — ✅ DONE (2026-03-17)
+- PipelineOrchestrator: three-phase startup (Buffer → Backfill → Live)
+- DealProcessor: classifies deals (17 types), tracks position open/close/modify
+- PositionRepository + AccountRepository: CRUD for positions and accounts
+- HistoryFetcher: full implementation with rate limiting + progress logging every 10 logins
+- SyncStateTracker: database-backed checkpoints with in-memory fallback
+- DealSink: added Reset() for reconnect scenarios
+- MT5Connection: integrated with PipelineOrchestrator for startup + reconnect
+- Program.cs: wired DealProcessor, PipelineOrchestrator, PositionRepository, AccountRepository
+- Health endpoint now reports pipeline state (state, backfilledDeals, bufferedReplayed, duplicatesSkipped)
+- End-to-end pipeline: simulator → channels → writers → DB (or discard)
+- Catch-up sync on restart via sync_state checkpoints
+- 24 new tests (orchestrator: 6, deal processor: 10, sync tracker: 7, deal sink reset: 1) — 67 total passing
+- **Phase 1 COMPLETE. Phase 2 COMPLETE.**
+- **Next up:** Phase 3 — Compute Engines (P&L, Correlation, Rule Engine, Exposure)
+
+### Phase 3: Compute Engines — ✅ DONE (2026-03-17)
+- PnLEngine: real-time unrealized P&L via tick-driven recalculation, BUY/SELL formulas, contract size lookup
+- CorrelationEngine: full 4-stage algorithm (Index → Match → Cluster → Score), union-find with path compression, live CheckDeal with adjacent bucket support, Prune for memory management
+- AccountScorer: incremental per-deal scoring, timing entropy (CV=σ/μ), expert trade tracking, ring correlation integration, risk classification (Critical/High/Medium/Low)
+- ExposureEngine: per-symbol net exposure aggregation from PnL results, portfolio totals
+- BotFingerprinter: timing entropy + EA clustering + volume pattern analysis, weighted confidence scoring
+- PnLEngineService: BackgroundService feeding ticks to PnLEngine, periodic stats + exposure recalc
+- ComputeEngineService: BackgroundService feeding deals through DealProcessor → AccountScorer → CorrelationEngine → PnLEngine → ExposureEngine pipeline, alert logging on score changes
+- ChannelFanOutService: explicit fan-out from main ingest channels to consumer channels (DB writers + compute engines)
+- REST API controller: GET /api/accounts, /api/accounts/{login}, /api/positions, /api/exposure, /api/rings
+- Program.cs: fan-out channel architecture, all engines registered as singletons, /health includes compute stats
+- 33 new tests (PnLEngine: 6, CorrelationEngine: 10, AccountScorer: 8, ExposureEngine: 4, BotFingerprinter: 5) — 100 total passing
+- `dotnet build` — zero warnings, zero errors
+- **Phases 1-3 COMPLETE.**
+- **Next up:** Phase 4 — React Dashboard
+
+### Phase 4: Dashboard v2 — React + WebSocket + Dealer UX — ✅ REBUILT (2026-03-17)
+- **Backend — DealerHub**: replaced WebSocketHub with DealerHub implementing IWebSocketBroadcaster interface. Subscribe pattern: clients send `{ "subscribe": ["prices","accounts","positions","alerts"] }`. Per-client subscription filtering. Throttling: prices 500ms/symbol, positions 1s global, scores/alerts immediate.
+- **Backend — BroadcastModels**: 4 sealed records (AccountSummaryDto, SymbolPriceDto, PositionSummaryDto, AlertMessageDto) for type-safe WS broadcasting.
+- **Backend — ComputeEngineService + PnLEngineService**: updated to use IWebSocketBroadcaster with new DTO types.
+- **Backend — Program.cs**: DealerHub registered as singleton + IWebSocketBroadcaster, WebSocket endpoint at /ws.
+- **Frontend — Complete rebuild**: deleted old web/src/, rebuilt from scratch with Tailwind CSS (@tailwindcss/vite plugin).
+- **Frontend — TipStore**: global state via Context + useReducer (not per-component state). Actions: PRICE_UPDATE, ACCOUNT_UPDATE, ACCOUNTS_LOADED, POSITION_UPDATE, POSITIONS_LOADED, ALERT, WS_STATUS.
+- **Frontend — WebSocket client**: auto-reconnect, subscribe pattern, dispatches to TipStore reducer.
+- **Frontend — Tailwind theme**: custom tip-* colors (bg, surface, border, text, muted, accent) and risk-* colors (critical red, high orange, medium yellow, low green), price-up/down colors.
+- **Frontend — AbuseGrid (MOST IMPORTANT)**: risk-colored rows, ScoreBadge with trend arrows (up/down/stable), 500ms CRITICAL flash (CSS @keyframes animation), double-click drill-down to AccountDetail, filter by risk level.
+- **Frontend — MarketWatch**: live price table with 300ms green/red flash on bid change, spread, change, change%.
+- **Frontend — AccountDetail**: 4 tabs (Deal History, Rule Breakdown, Ring Connections, Trading Metrics). Rule breakdown shows all 10 scoring rules with hit/miss indicators.
+- **Frontend — PositionsPanel**: all open positions with live P&L, aggregate totals.
+- **Frontend — ExposureDashboard**: bar chart (recharts) of net exposure by symbol, summary cards, detailed table.
+- **Frontend — Layout**: Sidebar with nav links (lucide-react icons), Header with WS status + alert count, Outlet pattern.
+- **Frontend — Routing**: react-router-dom v7, 6 routes (/, /market, /accounts, /accounts/:login, /positions, /exposure).
+- **Frontend packages**: tailwindcss, @tailwindcss/vite, react-router-dom, recharts, lucide-react, clsx
+- `npx tsc --noEmit` — zero errors
+- `npx vite build` — success
+- `dotnet build` — zero warnings, zero errors
+- **Phases 1-4 COMPLETE.**
+- **Next up:** Phase 5 — AI engines (StyleClassifier, BookRouter, SimulationEngine)

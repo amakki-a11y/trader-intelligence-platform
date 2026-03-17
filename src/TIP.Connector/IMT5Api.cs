@@ -43,6 +43,12 @@ public interface IMT5Api : IDisposable
     bool IsConnected { get; }
 
     /// <summary>
+    /// Last error description from the most recent API operation.
+    /// Empty string if no error.
+    /// </summary>
+    string LastError { get; }
+
+    /// <summary>
     /// Fired when a new deal is added on the MT5 server (CIMTDealSink.OnDealAdd equivalent).
     /// </summary>
     event Action<RawDeal>? OnDealAdd;

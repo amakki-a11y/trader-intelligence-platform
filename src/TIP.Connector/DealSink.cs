@@ -125,4 +125,19 @@ public sealed class DealSink
             }
         }
     }
+
+    /// <summary>
+    /// Resets the sink back to BUFFER mode for reconnect scenarios.
+    /// Clears any remaining buffer and resets the live flag so the
+    /// three-phase startup sequence can run again cleanly.
+    /// </summary>
+    public void Reset()
+    {
+        lock (_lock)
+        {
+            _isLive = false;
+            _buffer.Clear();
+            _logger.LogInformation("DealSink reset to BUFFER mode");
+        }
+    }
 }

@@ -6,9 +6,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using Serilog.Events;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using TIP.Api;
+using TIP.Api.Hubs;
 using TIP.Connector;
+using TIP.Core.Engines;
 using TIP.Data;
 
 // ── Serilog Bootstrap ─────────────────────────────────────────────────────────
@@ -35,24 +38,48 @@ try
 
     // ── Channel<T> Pipelines ──────────────────────────────────────────────────
 
+    // Main ingest channels — DealSink and TickListener write here, fan-out service reads
     var dealChannel = Channel.CreateUnbounded<DealEvent>(new UnboundedChannelOptions
     {
-        SingleReader = false,
+        SingleReader = true,
         SingleWriter = false
     });
 
     var tickChannel = Channel.CreateUnbounded<TickEvent>(new UnboundedChannelOptions
     {
-        SingleReader = false,
+        SingleReader = true,
         SingleWriter = false
+    });
+
+    // Fan-out consumer channels
+    var dealWriterChannel = Channel.CreateUnbounded<DealEvent>(new UnboundedChannelOptions
+    {
+        SingleReader = true,
+        SingleWriter = true
+    });
+
+    var computeDealChannel = Channel.CreateUnbounded<DealEvent>(new UnboundedChannelOptions
+    {
+        SingleReader = true,
+        SingleWriter = true
+    });
+
+    var tickWriterChannel = Channel.CreateUnbounded<TickEvent>(new UnboundedChannelOptions
+    {
+        SingleReader = true,
+        SingleWriter = true
+    });
+
+    var pnlTickChannel = Channel.CreateUnbounded<TickEvent>(new UnboundedChannelOptions
+    {
+        SingleReader = true,
+        SingleWriter = true
     });
 
     builder.Services.AddSingleton(dealChannel);
     builder.Services.AddSingleton(dealChannel.Writer);
-    builder.Services.AddSingleton(dealChannel.Reader);
     builder.Services.AddSingleton(tickChannel);
     builder.Services.AddSingleton(tickChannel.Writer);
-    builder.Services.AddSingleton(tickChannel.Reader);
 
     // ── MT5 Connector ───────────────────────────────────────────────────────
 
@@ -85,28 +112,7 @@ try
         GroupMask: serverSection.GetValue<string>("GroupMask") ?? "*",
         HealthHeartbeatIntervalMs: serverSection.GetValue<int>("HealthHeartbeatIntervalMs", 30000));
     builder.Services.AddSingleton(connectionConfig);
-
-    // Register connector services
-    builder.Services.AddSingleton<DealSink>();
-    builder.Services.AddSingleton<TickListener>();
-    builder.Services.AddSingleton<SyncStateTracker>();
-    builder.Services.AddSingleton<HistoryFetcher>();
-    builder.Services.AddHostedService<MT5Connection>();
-
-    // ── Services ──────────────────────────────────────────────────────────────
-
-    builder.Services.AddControllers();
-
-    builder.Services.AddCors(options =>
-    {
-        options.AddDefaultPolicy(policy =>
-        {
-            policy.WithOrigins("http://localhost:5173")
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
-        });
-    });
+    builder.Services.AddSingleton<ConnectionManager>();
 
     // ── Data Layer (TimescaleDB) ────────────────────────────────────────────
 
@@ -131,6 +137,20 @@ try
     var dbFactory = new DbConnectionFactory(dbEnabled ? connString : "Host=localhost;Database=tip");
     builder.Services.AddSingleton(dbFactory);
 
+    // Register connector services
+    builder.Services.AddSingleton<DealSink>();
+    builder.Services.AddSingleton<TickListener>();
+    builder.Services.AddSingleton(sp => new SyncStateTracker(
+        sp.GetRequiredService<ILogger<SyncStateTracker>>(),
+        dbEnabled ? connString : null));
+    builder.Services.AddSingleton<HistoryFetcher>();
+    builder.Services.AddSingleton<PipelineOrchestrator>();
+    builder.Services.AddHostedService<MT5Connection>();
+
+    // Register deal processor (pure logic, no I/O)
+    builder.Services.AddSingleton<DealProcessor>();
+
+    // Register repositories
     builder.Services.AddSingleton(sp => new TickWriter(
         sp.GetRequiredService<ILogger<TickWriter>>(),
         dbFactory,
@@ -142,23 +162,93 @@ try
         dbFactory));
 
     builder.Services.AddSingleton<TraderProfileRepository>();
+    builder.Services.AddSingleton<PositionRepository>();
+    builder.Services.AddSingleton<AccountRepository>();
 
     builder.Services.AddHostedService(sp => new TickWriterService(
         sp.GetRequiredService<ILogger<TickWriterService>>(),
-        tickChannel.Reader,
+        tickWriterChannel.Reader,
         sp.GetRequiredService<TickWriter>(),
         dbEnabled));
 
     builder.Services.AddHostedService(sp => new DealWriterService(
         sp.GetRequiredService<ILogger<DealWriterService>>(),
-        dealChannel.Reader,
+        dealWriterChannel.Reader,
         sp.GetRequiredService<DealRepository>(),
         dbEnabled,
         dealBatchSize,
         dealFlushMs));
 
-    // TODO: Phase 3, Task 7 — Register RuleEngine, CorrelationEngine, PnLEngine, ExposureEngine
-    // TODO: Phase 3, Task 11 — Register BotFingerprinter
+    // Fan-out service: reads main channels, writes to all consumer channels
+    builder.Services.AddHostedService(sp => new ChannelFanOutService(
+        sp.GetRequiredService<ILogger<ChannelFanOutService>>(),
+        dealChannel.Reader,
+        new[] { dealWriterChannel.Writer, computeDealChannel.Writer },
+        tickChannel.Reader,
+        new[] { tickWriterChannel.Writer, pnlTickChannel.Writer }));
+
+    // ── Services ──────────────────────────────────────────────────────────────
+
+    builder.Services.AddControllers();
+
+    builder.Services.AddCors(options =>
+    {
+        options.AddDefaultPolicy(policy =>
+        {
+            policy.WithOrigins("http://localhost:5173")
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        });
+    });
+
+    // ── Compute Engines (Phase 3) ────────────────────────────────────────────
+
+    // Default rule set for scoring
+    var defaultRules = new[]
+    {
+        new Rule(RuleMetric.TotalTrades, RuleOperator.GreaterThan, 1000, 10, "High trade count"),
+        new Rule(RuleMetric.CommissionToVolumeRatio, RuleOperator.LessThan, 0.5, 15, "Low commission-to-volume ratio"),
+        new Rule(RuleMetric.ProfitToCommissionRatio, RuleOperator.LessThan, 0.1, 15, "Near-zero profit-to-commission ratio"),
+        new Rule(RuleMetric.TimingEntropyCV, RuleOperator.LessThan, 0.1, 20, "Robotic timing precision"),
+        new Rule(RuleMetric.ExpertTradeRatio, RuleOperator.GreaterThan, 0.95, 10, "Almost all EA trades"),
+        new Rule(RuleMetric.TradesPerHour, RuleOperator.GreaterThan, 50, 15, "Superhuman trade frequency"),
+        new Rule(RuleMetric.BonusToDepositRatio, RuleOperator.GreaterThan, 0.5, 10, "High bonus-to-deposit ratio"),
+        new Rule(RuleMetric.IsRingMember, RuleOperator.Equal, 1.0, 20, "Part of correlated trading ring"),
+        new Rule(RuleMetric.RingCorrelationCount, RuleOperator.GreaterThan, 5, 10, "High ring correlation count"),
+        new Rule(RuleMetric.AvgVolumeLots, RuleOperator.LessOrEqual, 0.01, 5, "Micro lot farming"),
+    };
+
+    builder.Services.AddSingleton(new RuleEngine(defaultRules));
+    builder.Services.AddSingleton<CorrelationEngine>();
+    builder.Services.AddSingleton<PnLEngine>();
+    builder.Services.AddSingleton<ExposureEngine>();
+    builder.Services.AddSingleton<AccountScorer>();
+    builder.Services.AddSingleton<BotFingerprinter>();
+    builder.Services.AddSingleton<DealerHub>();
+    builder.Services.AddSingleton<IWebSocketBroadcaster>(sp => sp.GetRequiredService<DealerHub>());
+
+    // ── Background Compute Services ──────────────────────────────────────
+
+    builder.Services.AddHostedService(sp => new PnLEngineService(
+        sp.GetRequiredService<ILogger<PnLEngineService>>(),
+        pnlTickChannel.Reader,
+        sp.GetRequiredService<PnLEngine>(),
+        sp.GetRequiredService<PipelineOrchestrator>(),
+        sp.GetRequiredService<ExposureEngine>(),
+        sp.GetRequiredService<IWebSocketBroadcaster>()));
+
+    builder.Services.AddHostedService(sp => new ComputeEngineService(
+        sp.GetRequiredService<ILogger<ComputeEngineService>>(),
+        computeDealChannel.Reader,
+        sp.GetRequiredService<DealProcessor>(),
+        sp.GetRequiredService<AccountScorer>(),
+        sp.GetRequiredService<CorrelationEngine>(),
+        sp.GetRequiredService<PnLEngine>(),
+        sp.GetRequiredService<ExposureEngine>(),
+        sp.GetRequiredService<PipelineOrchestrator>(),
+        sp.GetRequiredService<IWebSocketBroadcaster>()));
+
     // TODO: Phase 5, Task 15 — Register SimulationEngine
     // TODO: Phase 5, Task 16 — Register StyleClassifier, BookRouter
 
@@ -173,7 +263,15 @@ try
 
     // ── Health Check ──────────────────────────────────────────────────────────
 
-    app.MapGet("/health", (IMT5Api api, TickListener ticks, TickWriter tw) => Results.Ok(new
+    app.MapGet("/health", (
+        IMT5Api api,
+        TickListener ticks,
+        TickWriter tw,
+        PipelineOrchestrator orchestrator,
+        PnLEngine pnlEngine,
+        ExposureEngine exposureEngine,
+        AccountScorer accountScorer,
+        CorrelationEngine correlationEngine) => Results.Ok(new
     {
         status = "healthy",
         timestamp = DateTimeOffset.UtcNow,
@@ -183,10 +281,40 @@ try
         ticksIngested = tw.TotalWritten,
         tickFlushes = tw.TotalFlushed,
         ticksBuffered = tw.BufferedCount,
-        dbEnabled
+        dbEnabled,
+        pipeline = new
+        {
+            state = orchestrator.State.ToString(),
+            backfilledDeals = orchestrator.BackfilledDeals,
+            backfilledTicks = orchestrator.BackfilledTicks,
+            bufferedReplayed = orchestrator.BufferedReplayed,
+            duplicatesSkipped = orchestrator.DuplicatesSkipped
+        },
+        compute = new
+        {
+            trackedPositions = pnlEngine.TrackedPositionCount,
+            totalUnrealizedPnL = pnlEngine.TotalUnrealizedPnL,
+            exposureSymbols = exposureEngine.SymbolCount,
+            scoredAccounts = accountScorer.AccountCount,
+            riskCounts = accountScorer.GetRiskCounts(),
+            correlationPairs = correlationEngine.PairCount,
+            indexedFingerprints = correlationEngine.IndexedCount
+        }
     }));
 
-    // TODO: Phase 4, Task 13 — MapGet /api/ws for WebSocket connections (real-time dashboard feed)
+    // ── WebSocket Endpoint ────────────────────────────────────────────────
+
+    app.Map("/ws", async (HttpContext context, DealerHub hub) =>
+    {
+        if (!context.WebSockets.IsWebSocketRequest)
+        {
+            context.Response.StatusCode = 400;
+            return;
+        }
+
+        var ws = await context.WebSockets.AcceptWebSocketAsync();
+        await hub.HandleConnection(ws, context.RequestAborted);
+    });
 
     app.Run();
 }

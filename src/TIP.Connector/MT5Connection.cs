@@ -1,6 +1,5 @@
 using System;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -24,15 +23,20 @@ public sealed record ConnectionConfig(
 
 /// <summary>
 /// Background service managing the MT5 Manager API connection lifecycle.
-/// Handles connect → subscribe → heartbeat → reconnect with exponential backoff.
+/// Delegates the three-phase startup (buffer → backfill → live) to PipelineOrchestrator,
+/// then monitors connection health and triggers reconnect + catch-up on failure.
 ///
 /// Design rationale:
 /// - Runs as a hosted BackgroundService so ASP.NET Core manages its lifetime.
-/// - Uses IMT5Api abstraction so it works with both real MT5 and simulator.
-/// - Writes deal and tick events into Channel&lt;T&gt; for downstream consumers.
+/// - Uses PipelineOrchestrator for the startup sequence, which handles:
+///   Phase 1: connect + buffer deals, Phase 2: backfill from checkpoint, Phase 3: go live.
+/// - On reconnect, orchestrator re-runs the same sequence — SyncStateTracker ensures
+///   only new data is fetched from the last checkpoint.
 /// - Exponential backoff (1s → 2s → 4s → ... → 60s max) prevents hammering
 ///   the MT5 server during outages while recovering quickly from transient failures.
-/// - Backoff resets on successful connection to ensure fast reconnect after brief blips.
+/// - ConnectionManager integration: reads config at each loop iteration so the REST API
+///   can update credentials. Watches a reconnect CancellationToken so config changes
+///   interrupt the heartbeat loop immediately.
 /// </summary>
 public sealed class MT5Connection : BackgroundService
 {
@@ -40,7 +44,8 @@ public sealed class MT5Connection : BackgroundService
     private readonly IMT5Api _api;
     private readonly DealSink _dealSink;
     private readonly TickListener _tickListener;
-    private readonly ConnectionConfig _config;
+    private readonly PipelineOrchestrator _orchestrator;
+    private readonly ConnectionManager _connectionManager;
 
     private const int InitialBackoffMs = 1000;
     private const int MaxBackoffMs = 60000;
@@ -52,24 +57,28 @@ public sealed class MT5Connection : BackgroundService
     /// <param name="api">MT5 API implementation (real or simulator).</param>
     /// <param name="dealSink">Deal sink for buffered/live deal forwarding.</param>
     /// <param name="tickListener">Tick listener for price cache and channel writes.</param>
-    /// <param name="config">MT5 server connection configuration.</param>
+    /// <param name="orchestrator">Pipeline orchestrator for three-phase startup.</param>
+    /// <param name="connectionManager">Connection manager for runtime config updates.</param>
     public MT5Connection(
         ILogger<MT5Connection> logger,
         IMT5Api api,
         DealSink dealSink,
         TickListener tickListener,
-        ConnectionConfig config)
+        PipelineOrchestrator orchestrator,
+        ConnectionManager connectionManager)
     {
         _logger = logger;
         _api = api;
         _dealSink = dealSink;
         _tickListener = tickListener;
-        _config = config;
+        _orchestrator = orchestrator;
+        _connectionManager = connectionManager;
     }
 
     /// <summary>
-    /// Main execution loop: connect → subscribe → heartbeat → reconnect on failure.
+    /// Main execution loop: orchestrator startup → heartbeat → reconnect on failure.
     /// Uses exponential backoff with a 60-second cap for reconnection attempts.
+    /// Reads config from ConnectionManager each iteration so runtime changes take effect.
     /// </summary>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -77,69 +86,120 @@ public sealed class MT5Connection : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            // Create a linked CTS so ConnectionManager can signal reconnect
+            using var reconnectCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+            _connectionManager.RegisterReconnectToken(reconnectCts);
+
+            // Read current config from ConnectionManager (may have been updated via REST API)
+            var config = _connectionManager.CurrentConfig;
+
+            // If disconnect was requested OR password is placeholder, wait for real credentials
+            if (_connectionManager.DisconnectRequested ||
+                config.Password == "CHANGE_ME" || string.IsNullOrWhiteSpace(config.Password))
+            {
+                if (config.Password == "CHANGE_ME" || string.IsNullOrWhiteSpace(config.Password))
+                {
+                    _logger.LogWarning("No real password configured — waiting for credentials via Settings page");
+                }
+                _connectionManager.SetDisconnected();
+                _logger.LogInformation("Waiting for new connection config...");
+
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, reconnectCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
+                {
+                    _connectionManager.DisconnectRequested = false;
+                    continue; // Config was updated, loop again
+                }
+
+                break; // Host shutdown
+            }
+
             try
             {
                 _logger.LogInformation(
-                    "Connecting to MT5 server {Server} as login {Login}...",
-                    _config.ServerAddress, _config.ManagerLogin);
-
-                if (!_api.Initialize())
-                {
-                    throw new InvalidOperationException("MT5 API initialization failed");
-                }
-
-                if (!_api.Connect(_config.ServerAddress, _config.ManagerLogin, _config.Password))
-                {
-                    throw new InvalidOperationException(
-                        $"Failed to connect to MT5 server {_config.ServerAddress}");
-                }
+                    "Starting pipeline for MT5 server {Server} as login {Login}...",
+                    config.ServerAddress, config.ManagerLogin);
 
                 // Wire deal callbacks → DealSink
                 _api.OnDealAdd += OnDealAdd;
                 _api.OnDealUpdate += OnDealUpdate;
-
-                // Wire tick callbacks → TickListener
                 _api.OnTick += OnTickReceived;
 
-                // Subscribe to live events
-                if (!_api.SubscribeDeals())
+                // Run three-phase startup: connect → backfill → go live
+                // Note: we hook into state changes to report "connected" early
+                var previousState = _orchestrator.State;
+                _ = Task.Run(async () =>
                 {
-                    _logger.LogWarning("Failed to subscribe to deal events");
-                }
+                    // Poll orchestrator state to detect when Phase 1 (Buffering) starts
+                    // This means MT5 Connect succeeded — report to dashboard immediately
+                    // Wait a bit for PUMP to fully initialize before querying logins
+                    while (!reconnectCts.Token.IsCancellationRequested)
+                    {
+                        var currentState = _orchestrator.State;
+                        if (currentState != previousState)
+                        {
+                            if (currentState == PipelineOrchestratorState.Buffering ||
+                                currentState == PipelineOrchestratorState.Backfilling)
+                            {
+                                // Give pump 2s to fully sync user data
+                                await Task.Delay(2000, reconnectCts.Token).ConfigureAwait(false);
+                                var scopeLogins = _api.GetUserLogins(config.GroupMask);
+                                _connectionManager.SetConnected(config.ServerAddress, scopeLogins.Length);
+                                break;
+                            }
+                            if (currentState == PipelineOrchestratorState.Error)
+                                break;
+                            previousState = currentState;
+                        }
+                        await Task.Delay(100, reconnectCts.Token).ConfigureAwait(false);
+                    }
+                }, reconnectCts.Token);
 
-                if (!_api.SubscribeTicks(_config.GroupMask))
-                {
-                    _logger.LogWarning("Failed to subscribe to tick events");
-                }
+                await _orchestrator.StartPipeline(config, reconnectCts.Token).ConfigureAwait(false);
 
-                _logger.LogInformation("Connected to MT5 server {Server}", _config.ServerAddress);
-                backoffMs = InitialBackoffMs; // Reset backoff on successful connection
+                // Pipeline fully live — report live status with symbol count
+                _connectionManager.SetLive(_tickListener.CachedSymbolCount);
+
+                backoffMs = InitialBackoffMs; // Reset backoff on successful startup
 
                 // Heartbeat loop — check connection health at configured interval
-                while (!stoppingToken.IsCancellationRequested)
+                while (!reconnectCts.Token.IsCancellationRequested)
                 {
-                    await Task.Delay(_config.HealthHeartbeatIntervalMs, stoppingToken)
+                    await Task.Delay(config.HealthHeartbeatIntervalMs, reconnectCts.Token)
                         .ConfigureAwait(false);
 
                     if (!_api.IsConnected)
                     {
                         _logger.LogWarning("MT5 heartbeat detected disconnection");
+                        _connectionManager.SetDisconnected("Heartbeat detected disconnection");
                         break;
                     }
 
                     _logger.LogDebug(
-                        "MT5 heartbeat OK — {SymbolCount} symbols cached",
-                        _tickListener.CachedSymbolCount);
+                        "MT5 heartbeat OK — {SymbolCount} symbols cached, pipeline={State}",
+                        _tickListener.CachedSymbolCount, _orchestrator.State);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 _logger.LogInformation("MT5 connection shutting down gracefully");
+                _connectionManager.SetDisconnected();
                 break;
+            }
+            catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
+            {
+                // Reconnect signal from ConnectionManager — config was updated
+                _logger.LogInformation("Reconnecting with updated configuration...");
+                _connectionManager.SetDisconnected();
+                backoffMs = InitialBackoffMs;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "MT5 connection failed. Reconnecting in {BackoffMs}ms...", backoffMs);
+                _connectionManager.SetDisconnected(ex.Message);
 
                 try
                 {

@@ -52,6 +52,9 @@ public sealed class MT5ApiSimulator : IMT5Api
     /// <inheritdoc />
     public bool IsConnected => _connected;
 
+    /// <inheritdoc />
+    public string LastError { get; private set; } = "";
+
     /// <summary>
     /// Initializes the MT5 API simulator.
     /// </summary>

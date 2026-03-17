@@ -39,3 +39,4 @@ appsettings.Development.json
 appsettings.Production.json
 *.pfx
 *.key
+.claude/

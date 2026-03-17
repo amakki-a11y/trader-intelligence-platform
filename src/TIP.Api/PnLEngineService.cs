@@ -1,0 +1,133 @@
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Threading.Channels;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using TIP.Api.Hubs;
+using TIP.Connector;
+using TIP.Core.Engines;
+
+namespace TIP.Api;
+
+/// <summary>
+/// Background service that feeds tick events to the PnLEngine for real-time P&amp;L calculation.
+///
+/// Design rationale:
+/// - Reads from a dedicated fan-out tick channel (separate from TickWriterService)
+///   so both DB persistence and P&amp;L calculation consume ticks independently.
+/// - Broadcasts tick and position updates via WebSocketHub for dashboard push.
+/// - Logs aggregate P&amp;L stats every 60 seconds for monitoring.
+/// - Waits for PipelineOrchestrator to reach LIVE state before processing.
+/// </summary>
+public sealed class PnLEngineService : BackgroundService
+{
+    private readonly ILogger<PnLEngineService> _logger;
+    private readonly ChannelReader<TickEvent> _tickReader;
+    private readonly PnLEngine _pnlEngine;
+    private readonly PipelineOrchestrator _orchestrator;
+    private readonly ExposureEngine _exposureEngine;
+    private readonly IWebSocketBroadcaster _broadcaster;
+    private readonly ConcurrentDictionary<string, double> _firstBid = new();
+    private long _ticksProcessed;
+
+    /// <summary>
+    /// Initializes the P&amp;L engine background service.
+    /// </summary>
+    public PnLEngineService(
+        ILogger<PnLEngineService> logger,
+        ChannelReader<TickEvent> tickReader,
+        PnLEngine pnlEngine,
+        PipelineOrchestrator orchestrator,
+        ExposureEngine exposureEngine,
+        IWebSocketBroadcaster broadcaster)
+    {
+        _logger = logger;
+        _tickReader = tickReader;
+        _pnlEngine = pnlEngine;
+        _orchestrator = orchestrator;
+        _exposureEngine = exposureEngine;
+        _broadcaster = broadcaster;
+    }
+
+    /// <summary>
+    /// Main loop: reads ticks and forwards to PnLEngine. Logs stats every 60s.
+    /// </summary>
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("PnLEngineService started — waiting for pipeline to go live");
+
+        // Wait for pipeline to reach at least BUFFERING state (ticks flow immediately)
+        while (_orchestrator.State < PipelineOrchestratorState.Buffering && !stoppingToken.IsCancellationRequested)
+        {
+            await Task.Delay(500, stoppingToken).ConfigureAwait(false);
+        }
+
+        _logger.LogInformation("PnLEngineService active — processing ticks");
+
+        // Start periodic stats logging
+        var statsTask = LogStatsAsync(stoppingToken);
+
+        try
+        {
+            await foreach (var tick in _tickReader.ReadAllAsync(stoppingToken).ConfigureAwait(false))
+            {
+                _pnlEngine.OnTick(tick.Symbol, tick.Bid, tick.Ask);
+                Interlocked.Increment(ref _ticksProcessed);
+
+                // Track first bid for change calculation
+                _firstBid.TryAdd(tick.Symbol, tick.Bid);
+                var firstBid = _firstBid.GetOrAdd(tick.Symbol, tick.Bid);
+                var change = tick.Bid - firstBid;
+                var changePct = firstBid != 0 ? (change / firstBid) * 100.0 : 0;
+
+                // Broadcast price to connected dashboards (throttled internally)
+                await _broadcaster.BroadcastPriceUpdate(new SymbolPriceDto(
+                    tick.Symbol, tick.Bid, tick.Ask, tick.Ask - tick.Bid,
+                    tick.TimeMsc, change, changePct)).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Expected during shutdown
+        }
+
+        await statsTask.ConfigureAwait(false);
+        _logger.LogInformation("PnLEngineService stopped — {TicksProcessed} ticks processed", _ticksProcessed);
+    }
+
+    /// <summary>
+    /// Logs aggregate P&amp;L stats, recalculates exposure, and broadcasts position updates every 60 seconds.
+    /// </summary>
+    private async Task LogStatsAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(60000, ct).ConfigureAwait(false);
+
+                // Recalculate exposure from current P&L
+                _exposureEngine.Recalculate(_pnlEngine.GetAllPnL());
+
+                _logger.LogInformation(
+                    "PnL stats: {Positions} positions, total P&L={TotalPnL:F2}, ticks processed={TicksProcessed}",
+                    _pnlEngine.TrackedPositionCount, _pnlEngine.TotalUnrealizedPnL, _ticksProcessed);
+
+                // Broadcast position updates to dashboards
+                foreach (var pnl in _pnlEngine.GetAllPnL().Values)
+                {
+                    await _broadcaster.BroadcastPositionUpdate(new PositionSummaryDto(
+                        pnl.PositionId, pnl.Login, pnl.Symbol,
+                        pnl.Direction, pnl.Volume, pnl.OpenPrice,
+                        pnl.CurrentPrice, pnl.UnrealizedPnL, pnl.Swap)).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+    }
+}

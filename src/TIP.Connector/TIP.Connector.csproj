@@ -2,17 +2,34 @@
 
   <PropertyGroup>
     <OutputType>Library</OutputType>
-    <!-- Define MT5_API_AVAILABLE when native MetaQuotes DLLs are in Libs/ folder -->
-    <!-- <DefineConstants>MT5_API_AVAILABLE</DefineConstants> -->
+    <DefineConstants>MT5_API_AVAILABLE</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.*" />
+    <PackageReference Include="Npgsql" Version="8.*" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\TIP.Core\TIP.Core.csproj" />
+  </ItemGroup>
+
+  <!-- MT5 Manager API native DLLs -->
+  <ItemGroup>
+    <Reference Include="MetaQuotes.MT5CommonAPI">
+      <HintPath>Libs\MetaQuotes.MT5CommonAPI64.dll</HintPath>
+    </Reference>
+    <Reference Include="MetaQuotes.MT5ManagerAPI">
+      <HintPath>Libs\MetaQuotes.MT5ManagerAPI64.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Copy native MT5APIManager64.dll to output -->
+  <ItemGroup>
+    <None Include="Libs\MT5APIManager64.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

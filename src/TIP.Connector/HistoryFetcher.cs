@@ -70,17 +70,25 @@ public sealed class HistoryFetcher : IDisposable
             "Starting deal backfill for {LoginCount} logins from {CutoffTime}",
             logins.Count, cutoffTime);
 
-        foreach (var login in logins)
+        for (var i = 0; i < logins.Count; i++)
         {
+            var login = logins[i];
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (i > 0 && i % 10 == 0)
+            {
+                _logger.LogInformation(
+                    "Backfilled {Current}/{Total} logins ({DealCount} deals so far)...",
+                    i, logins.Count, loadedDealIds.Count);
+            }
 
             await _concurrencyLimiter.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                // Check sync state for last checkpoint
+                // Check sync state for last checkpoint; default to 90 days back
                 var lastSync = _syncTracker.GetLastSyncTimestamp("deal_login", login.ToString());
-                var from = lastSync ?? cutoffTime;
-                var to = DateTimeOffset.UtcNow;
+                var from = lastSync ?? cutoffTime.AddDays(-90);
+                var to = cutoffTime;
 
                 var rawDeals = _api.RequestDeals(login, from, to);
 
