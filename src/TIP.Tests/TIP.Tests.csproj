@@ -12,6 +12,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TIP.Api\TIP.Api.csproj" />
     <ProjectReference Include="..\TIP.Connector\TIP.Connector.csproj" />
     <ProjectReference Include="..\TIP.Core\TIP.Core.csproj" />
     <ProjectReference Include="..\TIP.Data\TIP.Data.csproj" />

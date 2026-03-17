@@ -16,20 +16,20 @@ namespace TIP.Data;
 /// - Read operations support filtering by group, server, style, and routing for
 ///   dashboard views and bulk analysis.
 /// </summary>
-public class TraderProfileRepository
+public sealed class TraderProfileRepository
 {
     private readonly ILogger<TraderProfileRepository> _logger;
-    private readonly string _connectionString;
+    private readonly DbConnectionFactory _dbFactory;
 
     /// <summary>
     /// Initializes the trader profile repository.
     /// </summary>
     /// <param name="logger">Logger for query operations.</param>
-    /// <param name="connectionString">TimescaleDB connection string.</param>
-    public TraderProfileRepository(ILogger<TraderProfileRepository> logger, string connectionString)
+    /// <param name="dbFactory">Database connection factory.</param>
+    public TraderProfileRepository(ILogger<TraderProfileRepository> logger, DbConnectionFactory dbFactory)
     {
         _logger = logger;
-        _connectionString = connectionString;
+        _dbFactory = dbFactory;
     }
 
     // TODO: Phase 5, Task 14 — Upsert(TraderProfile profile)

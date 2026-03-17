@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current state
-v2.0 in development — Phase 1 in progress (solution scaffolded, schema done, MT5 connector done, batch tick writer next).
+v2.0 in development — Phase 1 complete (solution scaffolded, schema done, MT5 connector done, batch writers done). React dashboard next.
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to the v1.0 RebateAbuseDetector.
@@ -30,16 +30,17 @@ TIP.sln
 TIP.Connector → TIP.Core
 TIP.Data      → TIP.Core
 TIP.Api       → TIP.Connector, TIP.Core, TIP.Data
-TIP.Tests     → TIP.Connector, TIP.Core, TIP.Data
+TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 ```
 
 ## Build Order
 1. [x] .NET 8 solution structure ✅ (completed 2026-03-16)
 2. [x] TimescaleDB schema ✅ (completed 2026-03-16)
 3. [x] MT5 Connector: CIMTDealSink + OnTick → Channel<T> ✅ (completed 2026-03-16)
-4. [ ] React dashboard
-5. [ ] AI engines (StyleClassifier, BookRouter, SimulationEngine)
-6. [ ] ML-based classification
+4. [x] Batch tick/deal writers (Channel → TimescaleDB) ✅ (completed 2026-03-17)
+5. [ ] React dashboard
+6. [ ] AI engines (StyleClassifier, BookRouter, SimulationEngine)
+7. [ ] ML-based classification
 
 ## Coding Rules
 1. .NET 8 target, nullable enabled, warnings as errors
@@ -90,3 +91,16 @@ TIP.Tests     → TIP.Connector, TIP.Core, TIP.Data
 - 19 new unit tests (MT5Simulator: 12, DealSink: 7) — 31 total passing
 - `dotnet run` now starts and generates live simulated tick/deal data
 - **Next up:** Phase 1, Task 4 — Batch tick writer (Channel → TimescaleDB)
+
+### Phase 1, Task 4: Batch Tick/Deal Writers — ✅ DONE (2026-03-17)
+- Created DbConnectionFactory — NpgsqlDataSource wrapper with connection pooling
+- Implemented TickWriter — COPY protocol bulk inserts, thread-safe batching, re-buffer on failure
+- Implemented DealRepository — COPY bulk insert, INSERT ON CONFLICT, paginated SELECT
+- Created TickWriterService — BackgroundService reading Channel<TickEvent> → TickWriter with periodic flush
+- Created DealWriterService — BackgroundService reading Channel<DealEvent> → DealRepository with batch flush
+- Updated Program.cs — full DI wiring, auto-detects TimescaleDB availability (db=false if CHANGE_ME)
+- Updated TraderProfileRepository to use DbConnectionFactory
+- Health endpoint now reports ticksIngested, tickFlushes, ticksBuffered, dbEnabled
+- 12 new unit tests (TickWriter: 8, TickWriterService: 2, DealWriterService: 2) — 43 total passing
+- `dotnet run` shows TickWriterService + DealWriterService started in logs
+- **Next up:** Phase 2 — React dashboard

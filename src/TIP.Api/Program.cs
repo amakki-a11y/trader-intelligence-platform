@@ -6,7 +6,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using Serilog.Events;
+using Microsoft.Extensions.Logging;
+using TIP.Api;
 using TIP.Connector;
+using TIP.Data;
 
 // ── Serilog Bootstrap ─────────────────────────────────────────────────────────
 
@@ -105,7 +108,55 @@ try
         });
     });
 
-    // TODO: Phase 2, Task 6 — Register DealRepository, TickWriter, TraderProfileRepository
+    // ── Data Layer (TimescaleDB) ────────────────────────────────────────────
+
+    var connString = builder.Configuration.GetConnectionString("TimescaleDB") ?? "";
+    var dbEnabled = !string.IsNullOrEmpty(connString) && !connString.Contains("CHANGE_ME", StringComparison.Ordinal);
+
+    if (dbEnabled)
+    {
+        Log.Information("TimescaleDB: ENABLED — connecting to database");
+    }
+    else
+    {
+        Log.Warning("TimescaleDB: DISABLED — connection string not configured (data will be logged only)");
+    }
+
+    var pipelineConfig = builder.Configuration.GetSection("Pipeline");
+    var tickBatchSize = pipelineConfig.GetValue<int>("TickBatchSize", 10000);
+    var tickFlushMs = pipelineConfig.GetValue<int>("TickFlushIntervalMs", 1000);
+    var dealBatchSize = pipelineConfig.GetValue<int>("DealBatchSize", 500);
+    var dealFlushMs = pipelineConfig.GetValue<int>("DealFlushIntervalMs", 2000);
+
+    var dbFactory = new DbConnectionFactory(dbEnabled ? connString : "Host=localhost;Database=tip");
+    builder.Services.AddSingleton(dbFactory);
+
+    builder.Services.AddSingleton(sp => new TickWriter(
+        sp.GetRequiredService<ILogger<TickWriter>>(),
+        dbFactory,
+        tickBatchSize,
+        tickFlushMs));
+
+    builder.Services.AddSingleton(sp => new DealRepository(
+        sp.GetRequiredService<ILogger<DealRepository>>(),
+        dbFactory));
+
+    builder.Services.AddSingleton<TraderProfileRepository>();
+
+    builder.Services.AddHostedService(sp => new TickWriterService(
+        sp.GetRequiredService<ILogger<TickWriterService>>(),
+        tickChannel.Reader,
+        sp.GetRequiredService<TickWriter>(),
+        dbEnabled));
+
+    builder.Services.AddHostedService(sp => new DealWriterService(
+        sp.GetRequiredService<ILogger<DealWriterService>>(),
+        dealChannel.Reader,
+        sp.GetRequiredService<DealRepository>(),
+        dbEnabled,
+        dealBatchSize,
+        dealFlushMs));
+
     // TODO: Phase 3, Task 7 — Register RuleEngine, CorrelationEngine, PnLEngine, ExposureEngine
     // TODO: Phase 3, Task 11 — Register BotFingerprinter
     // TODO: Phase 5, Task 15 — Register SimulationEngine
@@ -122,13 +173,17 @@ try
 
     // ── Health Check ──────────────────────────────────────────────────────────
 
-    app.MapGet("/health", (IMT5Api api, TickListener ticks) => Results.Ok(new
+    app.MapGet("/health", (IMT5Api api, TickListener ticks, TickWriter tw) => Results.Ok(new
     {
         status = "healthy",
         timestamp = DateTimeOffset.UtcNow,
         version = "2.0.0-alpha",
         mt5Connected = api.IsConnected,
-        cachedSymbols = ticks.CachedSymbolCount
+        cachedSymbols = ticks.CachedSymbolCount,
+        ticksIngested = tw.TotalWritten,
+        tickFlushes = tw.TotalFlushed,
+        ticksBuffered = tw.BufferedCount,
+        dbEnabled
     }));
 
     // TODO: Phase 4, Task 13 — MapGet /api/ws for WebSocket connections (real-time dashboard feed)
