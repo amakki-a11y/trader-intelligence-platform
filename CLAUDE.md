@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current state
-v2.0 in development — Phase 1 in progress (solution scaffolded, schema next).
+v2.0 in development — Phase 1 in progress (solution scaffolded, schema done, MT5 connector next).
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to the v1.0 RebateAbuseDetector.
@@ -35,7 +35,7 @@ TIP.Tests     → TIP.Connector, TIP.Core, TIP.Data
 
 ## Build Order
 1. [x] .NET 8 solution structure ✅ (completed 2026-03-16)
-2. [ ] TimescaleDB schema
+2. [x] TimescaleDB schema ✅ (completed 2026-03-16)
 3. [ ] MT5 connection pipeline
 4. [ ] React dashboard
 5. [ ] AI engines (StyleClassifier, BookRouter, SimulationEngine)
@@ -67,3 +67,13 @@ TIP.Tests     → TIP.Connector, TIP.Core, TIP.Data
 - Program.cs working with Serilog, Channel<T>, CORS, /health endpoint
 - Installed .NET 8 SDK (8.0.419) on the machine
 - **Next up:** Phase 1, Task 2 — TimescaleDB schema
+
+### Phase 1, Task 2: TimescaleDB Schema — ✅ DONE (2026-03-16)
+- Created docs/schema.sql with 13 tables + 3 continuous aggregates
+- Tables: ticks, deals, positions, accounts, symbols, sync_state, trader_profiles, score_history, trading_metrics, audit_log, alerts, symbol_mapping, correlation_pairs
+- Hypertables: ticks (1-day chunks), deals (1-month), score_history (1-month), trading_metrics (1-month)
+- Continuous aggregates: candles_1m, candles_1h, candles_1d
+- Compression: ticks after 7 days, deals after 30 days, scores after 90 days
+- Retention: ticks dropped after 90 days, everything else permanent
+- Updated TIP.Data SQL templates
+- **Next up:** Phase 1, Task 3 — MT5 Connector (CIMTDealSink + OnTick)

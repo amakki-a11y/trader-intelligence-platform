@@ -41,6 +41,10 @@ public class DealRepository
     public Task<int> BulkInsert(IReadOnlyList<DealRecord> deals)
     {
         // TODO: Phase 2, Task 6 — Implement COPY protocol bulk insert via NpgsqlBinaryImporter
+        // SQL: COPY deals (deal_id, login, time, time_msc, symbol, action, volume, price,
+        //                   profit, commission, swap, fee, reason, expert_id, comment,
+        //                   position_id, server)
+        //      FROM STDIN (FORMAT BINARY)
         _logger.LogDebug("BulkInsert called with {Count} deals", deals.Count);
         return Task.FromResult(0);
     }
@@ -52,6 +56,13 @@ public class DealRepository
     public Task Insert(DealRecord deal)
     {
         // TODO: Phase 2, Task 6 — Implement single INSERT INTO deals (...)
+        // SQL: INSERT INTO deals (deal_id, login, time, time_msc, symbol, action, volume,
+        //                         price, profit, commission, swap, fee, reason, expert_id,
+        //                         comment, position_id, server)
+        //      VALUES (@deal_id, @login, @time, @time_msc, @symbol, @action, @volume,
+        //              @price, @profit, @commission, @swap, @fee, @reason, @expert_id,
+        //              @comment, @position_id, @server)
+        //      ON CONFLICT (deal_id, server, time) DO NOTHING
         _logger.LogDebug("Insert called for deal {DealId}", deal.DealId);
         return Task.CompletedTask;
     }
@@ -74,6 +85,13 @@ public class DealRepository
         int offset = 0)
     {
         // TODO: Phase 2, Task 6 — Implement SELECT from deals hypertable with keyset pagination
+        // SQL: SELECT deal_id, login, time, time_msc, symbol, action, volume, price,
+        //             profit, commission, swap, fee, reason, expert_id, comment,
+        //             position_id, server
+        //      FROM deals
+        //      WHERE login = @login AND time >= @from AND time <= @to
+        //      ORDER BY time DESC
+        //      LIMIT @limit OFFSET @offset
         _logger.LogDebug(
             "GetByLogin called for login {Login}, range {From}-{To}, limit {Limit}",
             login, from, to, limit);

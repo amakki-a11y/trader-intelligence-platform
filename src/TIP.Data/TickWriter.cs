@@ -42,4 +42,21 @@ public class TickWriter
     // TODO: Phase 2, Task 6 — Implement AddTick(TickEvent tick) — adds to internal buffer
     // TODO: Phase 2, Task 6 — Implement FlushAsync() — writes batch via NpgsqlBinaryImporter (COPY protocol)
     // TODO: Phase 2, Task 6 — Implement StartBackgroundFlusher(CancellationToken) — timer-based flush loop
+
+    // -------------------------------------------------------------------------
+    // SQL Templates (target table: ticks)
+    // -------------------------------------------------------------------------
+    // COPY command for bulk insert (NpgsqlBinaryImporter):
+    //   COPY ticks (time, time_msc, symbol, bid, ask, server)
+    //   FROM STDIN (FORMAT BINARY)
+    //
+    // Single INSERT (fallback):
+    //   INSERT INTO ticks (time, time_msc, symbol, bid, ask, server)
+    //   VALUES (@time, @time_msc, @symbol, @bid, @ask, @server)
+    //
+    // Latest price per symbol (for MarketWatch cache warm-up):
+    //   SELECT DISTINCT ON (symbol) symbol, bid, ask, time
+    //   FROM ticks
+    //   WHERE server = @server
+    //   ORDER BY symbol, time DESC
 }
