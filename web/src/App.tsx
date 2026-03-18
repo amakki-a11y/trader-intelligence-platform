@@ -721,32 +721,120 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
   accounts: Account[]; isLive: boolean; onSelect: (a: Account) => void;
 }) {
   const [events, setEvents] = useState<LiveEvent[]>([]);
+  const [wsStatus, setWsStatus] = useState<"connecting" | "connected" | "disconnected">("disconnected");
   const logRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // Load recent deals from all accounts on GO LIVE, then listen via WebSocket
   useEffect(() => {
-    if (!isLive) return;
-    const interval = setInterval(() => {
-      const acc = pick(accounts);
-      const sym = pick(SYMBOLS);
-      const action = Math.random() > 0.5 ? "BUY" : "SELL";
-      const vol = pick([0.01, 0.05, 0.1, 0.5, 1.0]);
-      const isCorrelated = acc.isRingMember && Math.random() > 0.4;
-      const scoreChange = isCorrelated ? randBetween(2, 6) : randBetween(-1, 2);
-      setEvents(prev => [{
-        id: Date.now() + Math.random(), time: new Date().toLocaleTimeString("en-GB"),
-        login: acc.login, name: acc.name, symbol: sym, action, volume: vol,
-        score: acc.score, scoreChange, isCorrelated,
-        correlated: isCorrelated ? pick(acc.ringPartners.length > 0 ? acc.ringPartners : [accounts[randBetween(0, 5)]!.login]) : null,
-        severity: severity(acc.score + scoreChange),
-      }, ...prev].slice(0, 100));
-    }, randBetween(1200, 3000));
-    return () => clearInterval(interval);
-  }, [isLive, accounts]);
+    if (!isLive) {
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      setWsStatus("disconnected");
+      return;
+    }
+
+    let reconnectTimer: ReturnType<typeof setTimeout>;
+    let ws: WebSocket;
+    const seenIds = new Set<number>();
+
+    // Load recent deal history for scored accounts
+    const loadRecent = async () => {
+      try {
+        const actionMap: Record<number, string> = { 0: "BUY", 1: "SELL", 2: "BALANCE", 3: "CREDIT", 4: "CHARGE", 5: "CORRECTION", 6: "BONUS" };
+        const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        // Fetch real account list from API (not the prop which may still have dummy data)
+        const acctRes = await fetch("/api/accounts");
+        if (!acctRes.ok) return;
+        const acctList = await acctRes.json();
+        if (!Array.isArray(acctList)) return;
+        const allDeals: LiveEvent[] = [];
+        for (const acc of acctList) {
+          try {
+            const res = await fetch(`/api/accounts/${acc.login}/deals?from=${from}`);
+            if (!res.ok) continue;
+            const data = await res.json();
+            if (!Array.isArray(data)) continue;
+            for (const d of data) {
+              if (seenIds.has(d.dealId)) continue;
+              seenIds.add(d.dealId);
+              allDeals.push({
+                id: d.dealId,
+                time: d.time ? new Date(d.time).toLocaleTimeString("en-GB") : "",
+                login: d.login, name: acc.name ?? d.login?.toString() ?? "",
+                symbol: d.symbol ?? "",
+                action: actionMap[d.action] ?? `ACTION_${d.action}`,
+                volume: d.volume ?? 0,
+                score: acc.abuseScore ?? 0, scoreChange: 0,
+                isCorrelated: false, correlated: null,
+                severity: acc.riskLevel === "Critical" ? "CRITICAL" : acc.riskLevel === "High" ? "HIGH" : acc.riskLevel === "Medium" ? "MEDIUM" : "LOW",
+              });
+            }
+          } catch { /* skip this account */ }
+        }
+        allDeals.sort((a, b) => (b.id as number) - (a.id as number));
+        setEvents(allDeals.slice(0, 200));
+      } catch { /* ignore */ }
+    };
+    loadRecent();
+
+    // WebSocket for new deals in real-time
+    const connect = () => {
+      setWsStatus("connecting");
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setWsStatus("connected");
+        ws.send(JSON.stringify({ subscribe: ["deals"] }));
+      };
+
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type !== "deals" || !msg.data) return;
+          const d = msg.data;
+          if (seenIds.has(d.dealId)) return;
+          seenIds.add(d.dealId);
+          const time = d.timeMsc ? new Date(d.timeMsc).toLocaleTimeString("en-GB") : new Date().toLocaleTimeString("en-GB");
+          setEvents(prev => [{
+            id: d.dealId ?? Date.now() + Math.random(),
+            time,
+            login: d.login,
+            name: d.login?.toString() ?? "",
+            symbol: d.symbol ?? "",
+            action: d.action ?? "",
+            volume: d.volume ?? 0,
+            score: d.score ?? 0,
+            scoreChange: d.scoreChange ?? 0,
+            isCorrelated: d.isCorrelated ?? false,
+            correlated: null,
+            severity: d.severity ?? "Low",
+          }, ...prev].slice(0, 200));
+        } catch { /* ignore parse errors */ }
+      };
+
+      ws.onclose = () => {
+        setWsStatus("disconnected");
+        wsRef.current = null;
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => { ws.close(); };
+    };
+
+    connect();
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    };
+  }, [isLive]);
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ width: 8, height: 8, borderRadius: "50%", background: isLive ? C.teal : C.t3, animation: isLive ? "pulse 1.5s infinite" : "none" }} />
-        <span style={{ fontSize: 12, color: isLive ? C.teal : C.t3, fontFamily: "'JetBrains Mono',monospace" }}>
-          {isLive ? "MONITORING — polling every 5s" : "STOPPED"}
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: wsStatus === "connected" ? C.teal : wsStatus === "connecting" ? C.amber : C.t3, animation: wsStatus === "connected" ? "pulse 1.5s infinite" : "none" }} />
+        <span style={{ fontSize: 12, color: wsStatus === "connected" ? C.teal : wsStatus === "connecting" ? C.amber : C.t3, fontFamily: "'JetBrains Mono',monospace" }}>
+          {wsStatus === "connected" ? "LIVE — WebSocket connected" : wsStatus === "connecting" ? "Connecting..." : "STOPPED"}
         </span>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: C.t3 }}>{events.length} events captured</span>

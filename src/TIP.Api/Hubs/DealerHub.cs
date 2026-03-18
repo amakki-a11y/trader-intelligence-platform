@@ -166,6 +166,12 @@ public sealed class DealerHub : IWebSocketBroadcaster
     }
 
     /// <inheritdoc/>
+    public async Task BroadcastDealEvent(DealEventDto deal)
+    {
+        await Broadcast("deals", deal).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
     public async Task BroadcastConnectionStatus(ConnectionStatusDto status)
     {
         await Broadcast("connection", status).ConfigureAwait(false);

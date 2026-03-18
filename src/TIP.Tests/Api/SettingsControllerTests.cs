@@ -328,6 +328,7 @@ public class SettingsControllerTests
         public Task BroadcastPriceUpdate(SymbolPriceDto price) => Task.CompletedTask;
         public Task BroadcastPositionUpdate(PositionSummaryDto position) => Task.CompletedTask;
         public Task BroadcastAlert(AlertMessageDto alert) => Task.CompletedTask;
+        public Task BroadcastDealEvent(DealEventDto deal) => Task.CompletedTask;
         public Task BroadcastConnectionStatus(ConnectionStatusDto status) => Task.CompletedTask;
     }
 }

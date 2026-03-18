@@ -39,6 +39,16 @@ public sealed record AlertMessageDto(
     DateTimeOffset Timestamp);
 
 /// <summary>
+/// Deal event DTO pushed to Live Monitor clients when a real deal is processed.
+/// Contains deal details plus computed score for real-time monitoring.
+/// </summary>
+public sealed record DealEventDto(
+    ulong DealId, ulong Login, string Symbol, string Action,
+    double Volume, double Price, double Profit,
+    double Score, double ScoreChange, bool IsCorrelated,
+    string Severity, long TimeMsc);
+
+/// <summary>
 /// Connection status DTO pushed when MT5 connection state changes.
 /// Used by the dashboard footer and settings page to show real-time connection state.
 /// </summary>

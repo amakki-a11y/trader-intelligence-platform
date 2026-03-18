@@ -24,6 +24,9 @@ public interface IWebSocketBroadcaster
     /// <summary>Pushes an alert to clients subscribed to "alerts".</summary>
     Task BroadcastAlert(AlertMessageDto alert);
 
+    /// <summary>Pushes a deal event to clients subscribed to "deals".</summary>
+    Task BroadcastDealEvent(DealEventDto deal);
+
     /// <summary>Pushes connection status change to clients subscribed to "connection".</summary>
     Task BroadcastConnectionStatus(ConnectionStatusDto status);
 }

@@ -146,7 +146,17 @@ public sealed class ComputeEngineService : BackgroundService
             _exposureEngine.Recalculate(_pnlEngine.GetAllPnL());
         }
 
-        // Step 6: Broadcast account update to WebSocket clients
+        // Step 6: Broadcast deal event to Live Monitor clients
+        var actionName = deal.Action switch { 0 => "BUY", 1 => "SELL", 2 => "BALANCE", 6 => "BONUS", _ => $"ACTION_{deal.Action}" };
+        await _broadcaster.BroadcastDealEvent(new DealEventDto(
+            deal.DealId, deal.Login, deal.Symbol, actionName,
+            deal.Volume, deal.Price, deal.Profit,
+            account.AbuseScore, account.AbuseScore - account.PreviousScore,
+            account.IsRingMember,
+            account.RiskLevel.ToString(),
+            deal.TimeMsc)).ConfigureAwait(false);
+
+        // Step 7: Broadcast account update to WebSocket clients (AbuseGrid)
         await _broadcaster.BroadcastAccountUpdate(new AccountSummaryDto(
             account.Login, account.Name, account.Group, account.Server,
             account.AbuseScore, account.PreviousScore, account.RiskLevel.ToString(),
@@ -156,7 +166,7 @@ public sealed class ComputeEngineService : BackgroundService
             account.TimingEntropyCV, account.ExpertTradeRatio,
             account.LastScored)).ConfigureAwait(false);
 
-        // Step 7: Alert on significant score changes
+        // Step 8: Alert on significant score changes
         var scoreDelta = Math.Abs(account.AbuseScore - account.PreviousScore);
         if (scoreDelta > 5)
         {
@@ -171,7 +181,7 @@ public sealed class ComputeEngineService : BackgroundService
                 DateTimeOffset.UtcNow)).ConfigureAwait(false);
         }
 
-        // Step 8: Critical threshold alert
+        // Step 9: Critical threshold alert
         if (account.AbuseScore >= 70 && account.PreviousScore < 70)
         {
             _logger.LogError(

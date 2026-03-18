@@ -174,6 +174,9 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 - **Frontend — Real Data**: Account Scanner fetches from /api/accounts (always polls, no connection guard), AccountDetail fetches balance/equity/leverage from /api/accounts/{login}/info, deal history from /api/accounts/{login}/deals, open positions from /api/accounts/{login}/positions
 - **Settings Page**: ConnectionManager with connect/disconnect, connection log, scan settings
 - **Debug Endpoint**: /api/settings/connection/debug for troubleshooting MT5 groups/logins
-- Tested with 2 real accounts (86672693 "Test", 86672696 "test") in group Test\Mak — 27 deals backfilled, open positions showing, real balance/equity displayed
+- **Live Monitor — Real Deals**: Live Monitor loads last 24h of real deals from all scored accounts via REST on GO LIVE, then subscribes to WebSocket "deals" channel for real-time new deals. Dedup via seenIds set.
+- **Deal Event Broadcasting**: ComputeEngineService broadcasts DealEventDto via IWebSocketBroadcaster on every deal processed. DealerHub routes to "deals" subscribers.
+- **BroadcastModels**: Added DealEventDto (dealId, login, symbol, action, volume, price, profit, score, scoreChange, isCorrelated, severity, timeMsc) and ConnectionStatusDto.
+- Tested with 2 real accounts (86672693 "Test", 86672696 "test") in group Test\Mak — 35 deals backfilled, open positions showing, real balance/equity displayed
 - `dotnet build` — zero warnings, zero errors
 - `npx tsc --noEmit` — zero errors
