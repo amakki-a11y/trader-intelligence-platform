@@ -8,6 +8,7 @@ using TIP.Api.Hubs;
 using TIP.Connector;
 using TIP.Core.Engines;
 using TIP.Core.Models;
+using TIP.Core.Resilience;
 using TIP.Data;
 
 namespace TIP.Api;
@@ -36,6 +37,7 @@ public sealed class ComputeEngineService : BackgroundService
     private readonly IWebSocketBroadcaster _broadcaster;
     private readonly AccountRepository _accountRepository;
     private readonly TIP.Data.DealRepository _dealRepository;
+    private readonly ServiceHealthTracker _healthTracker;
     private readonly bool _dbEnabled;
     private long _dealsProcessed;
 
@@ -54,6 +56,7 @@ public sealed class ComputeEngineService : BackgroundService
         IWebSocketBroadcaster broadcaster,
         AccountRepository accountRepository,
         TIP.Data.DealRepository dealRepository,
+        ServiceHealthTracker healthTracker,
         bool dbEnabled)
     {
         _logger = logger;
@@ -67,6 +70,7 @@ public sealed class ComputeEngineService : BackgroundService
         _broadcaster = broadcaster;
         _accountRepository = accountRepository;
         _dealRepository = dealRepository;
+        _healthTracker = healthTracker;
         _dbEnabled = dbEnabled;
     }
 
@@ -120,8 +124,21 @@ public sealed class ComputeEngineService : BackgroundService
         {
             await foreach (var deal in _dealReader.ReadAllAsync(stoppingToken).ConfigureAwait(false))
             {
-                await ProcessDeal(deal).ConfigureAwait(false);
-                Interlocked.Increment(ref _dealsProcessed);
+                try
+                {
+                    await ProcessDeal(deal).ConfigureAwait(false);
+                    Interlocked.Increment(ref _dealsProcessed);
+                    _healthTracker.RecordSuccess("computeEngine");
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    var errors = _healthTracker.RecordError("computeEngine");
+                    _logger.LogError(ex, "ComputeEngineService loop iteration failed for deal {DealId} — continuing", deal.DealId);
+                    if (errors >= 50)
+                    {
+                        _logger.LogCritical("ComputeEngineService failing repeatedly — {Errors} consecutive errors — possible systemic issue", errors);
+                    }
+                }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

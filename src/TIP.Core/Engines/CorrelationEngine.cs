@@ -53,6 +53,7 @@ public sealed class CorrelationEngine
     private readonly ILogger<CorrelationEngine> _logger;
     private readonly int _windowMs;
     private readonly int _minPairsForRing;
+    private readonly int _maxFingerprints;
 
     /// <summary>
     /// Initializes the correlation engine.
@@ -60,12 +61,19 @@ public sealed class CorrelationEngine
     /// <param name="logger">Logger for ring detection events.</param>
     /// <param name="windowMs">Time window in milliseconds for correlation matching (default 5000).</param>
     /// <param name="minPairsForRing">Minimum correlated pairs to form a ring (default 3).</param>
-    public CorrelationEngine(ILogger<CorrelationEngine> logger, int windowMs = 5000, int minPairsForRing = 3)
+    /// <param name="maxFingerprints">Maximum fingerprint count before auto-prune (default 500,000).</param>
+    public CorrelationEngine(ILogger<CorrelationEngine> logger, int windowMs = 5000, int minPairsForRing = 3, int maxFingerprints = 500_000)
     {
         _logger = logger;
         _windowMs = windowMs;
         _minPairsForRing = minPairsForRing;
+        _maxFingerprints = maxFingerprints;
     }
+
+    /// <summary>
+    /// Maximum fingerprint count before auto-prune triggers.
+    /// </summary>
+    public int MaxFingerprints => _maxFingerprints;
 
     /// <summary>
     /// Stage 1: Indexes a collection of trade fingerprints into time-window buckets.
@@ -122,40 +130,57 @@ public sealed class CorrelationEngine
     /// <returns>Any correlation matches found with existing fingerprints.</returns>
     public List<CorrelationMatch> CheckDeal(TradeFingerprint fingerprint)
     {
-        var matches = new List<CorrelationMatch>();
-        var key = fingerprint.GetBucketKey(_windowMs);
-
-        // Check same bucket
-        if (_index.TryGetValue(key, out var bucket))
+        try
         {
-            FindMatchesInBucket(fingerprint, bucket, matches);
-        }
+            // Auto-prune if fingerprint count exceeds limit
+            if (IndexedCount >= _maxFingerprints)
+            {
+                var cutoff = DateTimeOffset.UtcNow.AddHours(-24);
+                var pruned = Prune(cutoff);
+                _logger.LogWarning("CorrelationEngine auto-pruned {Pruned} fingerprints (was at {Max} limit), now {Count}",
+                    pruned, _maxFingerprints, IndexedCount);
+            }
 
-        // Check adjacent buckets (boundary case: 4999ms and 5001ms in different buckets)
-        var adjacentKey = (fingerprint.Symbol, key.Bucket - 1);
-        if (_index.TryGetValue(adjacentKey, out var prevBucket))
+            var matches = new List<CorrelationMatch>();
+            var key = fingerprint.GetBucketKey(_windowMs);
+
+            // Check same bucket
+            if (_index.TryGetValue(key, out var bucket))
+            {
+                FindMatchesInBucket(fingerprint, bucket, matches);
+            }
+
+            // Check adjacent buckets (boundary case: 4999ms and 5001ms in different buckets)
+            var adjacentKey = (fingerprint.Symbol, key.Bucket - 1);
+            if (_index.TryGetValue(adjacentKey, out var prevBucket))
+            {
+                FindMatchesInBucket(fingerprint, prevBucket, matches);
+            }
+
+            var nextKey = (fingerprint.Symbol, key.Bucket + 1);
+            if (_index.TryGetValue(nextKey, out var nextBucket))
+            {
+                FindMatchesInBucket(fingerprint, nextBucket, matches);
+            }
+
+            // Add to index
+            if (!_index.TryGetValue(key, out var list))
+            {
+                list = new List<TradeFingerprint>();
+                _index[key] = list;
+            }
+            list.Add(fingerprint);
+
+            // Track ExpertID
+            TrackExpertId(fingerprint.Login, fingerprint.ExpertId);
+
+            return matches;
+        }
+        catch (Exception ex)
         {
-            FindMatchesInBucket(fingerprint, prevBucket, matches);
+            _logger.LogError(ex, "CorrelationEngine.CheckDeal failed for login {Login} — returning no correlation", fingerprint.Login);
+            return new List<CorrelationMatch>();
         }
-
-        var nextKey = (fingerprint.Symbol, key.Bucket + 1);
-        if (_index.TryGetValue(nextKey, out var nextBucket))
-        {
-            FindMatchesInBucket(fingerprint, nextBucket, matches);
-        }
-
-        // Add to index
-        if (!_index.TryGetValue(key, out var list))
-        {
-            list = new List<TradeFingerprint>();
-            _index[key] = list;
-        }
-        list.Add(fingerprint);
-
-        // Track ExpertID
-        TrackExpertId(fingerprint.Login, fingerprint.ExpertId);
-
-        return matches;
     }
 
     /// <summary>

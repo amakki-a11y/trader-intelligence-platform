@@ -49,6 +49,8 @@ public sealed class MT5Connection : BackgroundService
 
     private const int InitialBackoffMs = 1000;
     private const int MaxBackoffMs = 60000;
+    private const int MaxReconnectAttempts = 10;
+    private int _reconnectAttempts;
 
     /// <summary>
     /// Initializes a new MT5 connection manager.
@@ -169,6 +171,7 @@ public sealed class MT5Connection : BackgroundService
                 _connectionManager.SetLive(_tickListener.CachedSymbolCount);
 
                 backoffMs = InitialBackoffMs; // Reset backoff on successful startup
+                _reconnectAttempts = 0;     // Reset reconnect counter on success
 
                 // Heartbeat loop — check connection health at configured interval
                 while (!reconnectCts.Token.IsCancellationRequested)
@@ -203,8 +206,27 @@ public sealed class MT5Connection : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "MT5 connection failed. Reconnecting in {BackoffMs}ms...", backoffMs);
+                _reconnectAttempts++;
+                _logger.LogError(ex, "MT5 connection failed (attempt {Attempt}/{Max}). Reconnecting in {BackoffMs}ms...",
+                    _reconnectAttempts, MaxReconnectAttempts, backoffMs);
                 _connectionManager.SetDisconnected(ex.Message);
+
+                if (_reconnectAttempts >= MaxReconnectAttempts)
+                {
+                    _logger.LogCritical("MT5 reconnect exhausted after {Max} attempts — manual intervention required", MaxReconnectAttempts);
+                    // Wait for manual config update via REST API
+                    try
+                    {
+                        await Task.Delay(Timeout.Infinite, reconnectCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
+                    {
+                        _reconnectAttempts = 0;
+                        backoffMs = InitialBackoffMs;
+                        continue;
+                    }
+                    break;
+                }
 
                 try
                 {

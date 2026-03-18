@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Npgsql;
 using TIP.Connector;
 using TIP.Core.Models;
+using TIP.Core.Resilience;
 
 using TIP.Data;
 
@@ -22,6 +23,7 @@ namespace TIP.Api;
 ///   smaller batches with INSERT ON CONFLICT for idempotency.
 /// - Batches deals by count or time interval (whichever triggers first).
 /// - Converts DealEvent (transit record) to DealRecord (persistence record) with server tag.
+/// - Circuit breaker wraps DB writes: on repeated failures, rejects fast and buffers accumulate.
 /// - Graceful shutdown: drains remaining channel items and does a final flush.
 /// </summary>
 public sealed class DealWriterService : BackgroundService
@@ -35,7 +37,10 @@ public sealed class DealWriterService : BackgroundService
     private readonly string _serverName;
     private readonly List<DealRecord> _buffer;
     private readonly object _bufferLock = new();
+    private readonly CircuitBreaker<int> _dbCircuit;
+    private readonly ServiceHealthTracker _healthTracker;
     private long _totalProcessed;
+    private DateTimeOffset _lastCircuitWarning = DateTimeOffset.MinValue;
 
     /// <summary>
     /// Initializes the deal writer background service.
@@ -43,6 +48,8 @@ public sealed class DealWriterService : BackgroundService
     /// <param name="logger">Logger for service lifecycle events.</param>
     /// <param name="dealReader">Channel reader for incoming deal events.</param>
     /// <param name="dealRepository">Deal repository for database writes.</param>
+    /// <param name="dbCircuit">Circuit breaker for database writes.</param>
+    /// <param name="healthTracker">Shared health tracker for service metrics.</param>
     /// <param name="dbEnabled">Whether database writes are enabled (false = log-only mode).</param>
     /// <param name="batchSize">Deal batch size before flush (default 500).</param>
     /// <param name="flushIntervalMs">Max interval between flushes in ms (default 2000).</param>
@@ -51,6 +58,8 @@ public sealed class DealWriterService : BackgroundService
         ILogger<DealWriterService> logger,
         ChannelReader<DealEvent> dealReader,
         DealRepository dealRepository,
+        CircuitBreaker<int> dbCircuit,
+        ServiceHealthTracker healthTracker,
         bool dbEnabled = false,
         int batchSize = 500,
         int flushIntervalMs = 2000,
@@ -59,6 +68,8 @@ public sealed class DealWriterService : BackgroundService
         _logger = logger;
         _dealReader = dealReader;
         _dealRepository = dealRepository;
+        _dbCircuit = dbCircuit;
+        _healthTracker = healthTracker;
         _dbEnabled = dbEnabled;
         _batchSize = batchSize;
         _flushIntervalMs = flushIntervalMs;
@@ -87,20 +98,34 @@ public sealed class DealWriterService : BackgroundService
         {
             await foreach (var deal in _dealReader.ReadAllAsync(stoppingToken).ConfigureAwait(false))
             {
-                Interlocked.Increment(ref _totalProcessed);
-
-                var record = ConvertToRecord(deal);
-                bool batchFull;
-
-                lock (_bufferLock)
+                try
                 {
-                    _buffer.Add(record);
-                    batchFull = _buffer.Count >= _batchSize;
+                    Interlocked.Increment(ref _totalProcessed);
+
+                    var record = ConvertToRecord(deal);
+                    bool batchFull;
+
+                    lock (_bufferLock)
+                    {
+                        _buffer.Add(record);
+                        batchFull = _buffer.Count >= _batchSize;
+                    }
+
+                    if (batchFull && _dbEnabled)
+                    {
+                        await FlushBufferWithCircuitBreaker(stoppingToken).ConfigureAwait(false);
+                    }
+
+                    _healthTracker.RecordSuccess("dealWriter");
                 }
-
-                if (batchFull && _dbEnabled)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    await FlushBufferAsync(stoppingToken).ConfigureAwait(false);
+                    var errors = _healthTracker.RecordError("dealWriter");
+                    _logger.LogError(ex, "DealWriterService loop iteration failed — continuing");
+                    if (errors >= 50)
+                    {
+                        _logger.LogCritical("DealWriterService failing repeatedly — {Errors} consecutive errors — possible systemic issue", errors);
+                    }
                 }
             }
         }
@@ -120,6 +145,33 @@ public sealed class DealWriterService : BackgroundService
         _logger.LogInformation(
             "DealWriterService stopped (totalProcessed={TotalProcessed}, totalInserted={TotalInserted})",
             TotalProcessed, _dealRepository.TotalInserted);
+    }
+
+    /// <summary>
+    /// Flushes buffered deals through the circuit breaker.
+    /// On open circuit, logs a warning at most once per minute.
+    /// </summary>
+    private async Task FlushBufferWithCircuitBreaker(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _dbCircuit.ExecuteAsync(async () =>
+            {
+                await FlushBufferAsync(cancellationToken).ConfigureAwait(false);
+                return 0;
+            }).ConfigureAwait(false);
+        }
+        catch (CircuitBreakerOpenException)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (now - _lastCircuitWarning >= TimeSpan.FromMinutes(1))
+            {
+                _lastCircuitWarning = now;
+                int count;
+                lock (_bufferLock) { count = _buffer.Count; }
+                _logger.LogWarning("DB circuit open — {N} deals buffered", count);
+            }
+        }
     }
 
     /// <summary>
@@ -169,6 +221,8 @@ public sealed class DealWriterService : BackgroundService
             {
                 _buffer.InsertRange(0, batch);
             }
+
+            throw; // Re-throw so circuit breaker sees the failure
         }
     }
 
@@ -191,7 +245,7 @@ public sealed class DealWriterService : BackgroundService
 
                 if (_dbEnabled && bufferedCount > 0)
                 {
-                    await FlushBufferAsync(stoppingToken).ConfigureAwait(false);
+                    await FlushBufferWithCircuitBreaker(stoppingToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 
 namespace TIP.Core.Engines;
 
@@ -16,18 +17,70 @@ namespace TIP.Core.Engines;
 public sealed class DealProcessor
 {
     private readonly ConcurrentDictionary<ulong, PositionState> _openPositions = new();
+    private readonly ILogger<DealProcessor>? _logger;
+
+    /// <summary>
+    /// Initializes a DealProcessor with optional logging.
+    /// </summary>
+    /// <param name="logger">Logger for validation warnings (optional for backward compat).</param>
+    public DealProcessor(ILogger<DealProcessor>? logger = null)
+    {
+        _logger = logger;
+    }
 
     /// <summary>
     /// Process a single deal event. Updates position state and classifies the deal.
     /// Called for every deal — both historical (backfill) and live.
+    /// Validates input fields; returns Invalid result for bad data instead of throwing.
     /// </summary>
     /// <param name="dealId">MT5 deal ticket number.</param>
     /// <param name="action">Deal action code (0=BUY, 1=SELL, 2=BALANCE, etc.).</param>
     /// <param name="volume">Deal volume in lots.</param>
     /// <param name="positionId">Position ticket this deal belongs to.</param>
+    /// <param name="login">Account login (0 = invalid).</param>
+    /// <param name="symbol">Trading symbol (null/empty = invalid for trade deals).</param>
+    /// <param name="timeMsc">Deal time in milliseconds since epoch (0 = invalid).</param>
     /// <returns>Classification result with deal type and position effect.</returns>
-    public DealProcessingResult ProcessDeal(ulong dealId, int action, double volume, ulong positionId)
+    public DealProcessingResult ProcessDeal(ulong dealId, int action, double volume, ulong positionId,
+        ulong login = 1, string? symbol = "X", long timeMsc = 1)
     {
+        // Validate required fields
+        if (login == 0)
+        {
+            _logger?.LogWarning("Invalid deal {DealId}: login is zero", dealId);
+            return new DealProcessingResult
+            {
+                DealId = dealId,
+                Type = DealType.Unknown,
+                PositionEffect = PositionAction.Invalid,
+                AffectedPositionId = null
+            };
+        }
+
+        if (string.IsNullOrEmpty(symbol) && (action == 0 || action == 1))
+        {
+            _logger?.LogWarning("Invalid deal {DealId}: symbol is null/empty for trade action {Action}", dealId, action);
+            return new DealProcessingResult
+            {
+                DealId = dealId,
+                Type = DealType.Unknown,
+                PositionEffect = PositionAction.Invalid,
+                AffectedPositionId = null
+            };
+        }
+
+        if (timeMsc <= 0)
+        {
+            _logger?.LogWarning("Invalid deal {DealId}: timeMsc is {TimeMsc} (epoch or before)", dealId, timeMsc);
+            return new DealProcessingResult
+            {
+                DealId = dealId,
+                Type = DealType.Unknown,
+                PositionEffect = PositionAction.Invalid,
+                AffectedPositionId = null
+            };
+        }
+
         var dealType = ClassifyAction(action);
 
         if (dealType == DealType.Buy || dealType == DealType.Sell)
@@ -206,5 +259,7 @@ public enum PositionAction
     /// <summary>Deal partially closes an existing position.</summary>
     Modified,
     /// <summary>Non-trade deal — no position effect.</summary>
-    None
+    None,
+    /// <summary>Deal had invalid input data and was rejected.</summary>
+    Invalid
 }

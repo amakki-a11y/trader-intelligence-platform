@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using TIP.Connector;
 using TIP.Core.Engines;
 using TIP.Core.Models;
+using TIP.Core.Resilience;
 using TIP.Data;
 
 namespace TIP.Api;
@@ -33,6 +34,7 @@ public sealed class IntelligenceService : BackgroundService
     private readonly BookRouter _bookRouter;
     private readonly PipelineOrchestrator _orchestrator;
     private readonly TraderProfileRepository _profileRepository;
+    private readonly ServiceHealthTracker _healthTracker;
     private readonly bool _dbEnabled;
     private int _cycleCount;
 
@@ -46,6 +48,7 @@ public sealed class IntelligenceService : BackgroundService
         BookRouter bookRouter,
         PipelineOrchestrator orchestrator,
         TraderProfileRepository profileRepository,
+        ServiceHealthTracker healthTracker,
         bool dbEnabled)
     {
         _logger = logger;
@@ -54,6 +57,7 @@ public sealed class IntelligenceService : BackgroundService
         _bookRouter = bookRouter;
         _orchestrator = orchestrator;
         _profileRepository = profileRepository;
+        _healthTracker = healthTracker;
         _dbEnabled = dbEnabled;
     }
 
@@ -81,10 +85,16 @@ public sealed class IntelligenceService : BackgroundService
             {
                 await RunCycle().ConfigureAwait(false);
                 Interlocked.Increment(ref _cycleCount);
+                _healthTracker.RecordSuccess("intelligence");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogError(ex, "Intelligence cycle failed");
+                var errors = _healthTracker.RecordError("intelligence");
+                _logger.LogError(ex, "IntelligenceService cycle failed — continuing");
+                if (errors >= 50)
+                {
+                    _logger.LogCritical("IntelligenceService failing repeatedly — {Errors} consecutive errors — possible systemic issue", errors);
+                }
             }
 
             await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken).ConfigureAwait(false);

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TIP.Connector;
+using TIP.Core.Resilience;
 
 using TIP.Data;
 
@@ -21,6 +22,7 @@ namespace TIP.Api;
 ///   (partial batches flushed within flushIntervalMs).
 /// - A separate Task handles the timer-based flush so the main read loop isn't blocked.
 /// - Graceful shutdown: drains remaining channel items and does a final flush.
+/// - Circuit breaker wraps DB writes: on repeated failures, rejects fast and buffers accumulate.
 /// </summary>
 public sealed class TickWriterService : BackgroundService
 {
@@ -28,6 +30,9 @@ public sealed class TickWriterService : BackgroundService
     private readonly ChannelReader<TickEvent> _tickReader;
     private readonly TickWriter _tickWriter;
     private readonly bool _dbEnabled;
+    private readonly CircuitBreaker<int> _dbCircuit;
+    private readonly ServiceHealthTracker _healthTracker;
+    private DateTimeOffset _lastCircuitWarning = DateTimeOffset.MinValue;
 
     /// <summary>
     /// Initializes the tick writer background service.
@@ -35,16 +40,22 @@ public sealed class TickWriterService : BackgroundService
     /// <param name="logger">Logger for service lifecycle events.</param>
     /// <param name="tickReader">Channel reader for incoming tick events.</param>
     /// <param name="tickWriter">Tick writer that handles batching and COPY protocol writes.</param>
+    /// <param name="dbCircuit">Circuit breaker for database writes.</param>
+    /// <param name="healthTracker">Shared health tracker for service metrics.</param>
     /// <param name="dbEnabled">Whether database writes are enabled (false = log-only mode).</param>
     public TickWriterService(
         ILogger<TickWriterService> logger,
         ChannelReader<TickEvent> tickReader,
         TickWriter tickWriter,
+        CircuitBreaker<int> dbCircuit,
+        ServiceHealthTracker healthTracker,
         bool dbEnabled = false)
     {
         _logger = logger;
         _tickReader = tickReader;
         _tickWriter = tickWriter;
+        _dbCircuit = dbCircuit;
+        _healthTracker = healthTracker;
         _dbEnabled = dbEnabled;
     }
 
@@ -64,17 +75,24 @@ public sealed class TickWriterService : BackgroundService
         {
             await foreach (var tick in _tickReader.ReadAllAsync(stoppingToken).ConfigureAwait(false))
             {
-                var batchFull = _tickWriter.AddTick(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
-
-                if (batchFull && _dbEnabled)
+                try
                 {
-                    try
+                    var batchFull = _tickWriter.AddTick(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
+
+                    if (batchFull && _dbEnabled)
                     {
-                        await _tickWriter.FlushAsync(stoppingToken).ConfigureAwait(false);
+                        await FlushWithCircuitBreaker(stoppingToken).ConfigureAwait(false);
                     }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
+
+                    _healthTracker.RecordSuccess("tickWriter");
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    var errors = _healthTracker.RecordError("tickWriter");
+                    _logger.LogError(ex, "TickWriterService loop iteration failed — continuing");
+                    if (errors >= 50)
                     {
-                        _logger.LogError(ex, "Tick batch flush failed — will retry on next trigger");
+                        _logger.LogCritical("TickWriterService failing repeatedly — {Errors} consecutive errors — possible systemic issue", errors);
                     }
                 }
             }
@@ -110,6 +128,33 @@ public sealed class TickWriterService : BackgroundService
     }
 
     /// <summary>
+    /// Flushes ticks through the circuit breaker. On open circuit, logs a warning at most once per minute.
+    /// </summary>
+    private async Task FlushWithCircuitBreaker(CancellationToken ct)
+    {
+        try
+        {
+            await _dbCircuit.ExecuteAsync(async () =>
+            {
+                return await _tickWriter.FlushAsync(ct).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+        catch (CircuitBreakerOpenException)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (now - _lastCircuitWarning >= TimeSpan.FromMinutes(1))
+            {
+                _lastCircuitWarning = now;
+                _logger.LogWarning("DB circuit open — {N} ticks buffered", _tickWriter.BufferedCount);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Tick batch flush failed — will retry on next trigger");
+        }
+    }
+
+    /// <summary>
     /// Periodic flush loop: flushes partial batches every flushIntervalMs to keep latency bounded.
     /// </summary>
     private async Task RunPeriodicFlushAsync(CancellationToken stoppingToken)
@@ -122,7 +167,7 @@ public sealed class TickWriterService : BackgroundService
 
                 if (_dbEnabled && _tickWriter.BufferedCount > 0)
                 {
-                    await _tickWriter.FlushAsync(stoppingToken).ConfigureAwait(false);
+                    await FlushWithCircuitBreaker(stoppingToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

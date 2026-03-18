@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using TIP.Api;
 using TIP.Connector;
+using TIP.Core.Resilience;
 using TIP.Data;
 
 namespace TIP.Tests.Data;
@@ -49,6 +50,8 @@ public class DealWriterServiceTests
             NullLogger<DealWriterService>.Instance,
             channel.Reader,
             repo,
+            new CircuitBreaker<int>("test-db", 5, TimeSpan.FromSeconds(30), NullLogger.Instance),
+            new ServiceHealthTracker(),
             dbEnabled: false);
 
         using var cts = new CancellationTokenSource();
@@ -79,6 +82,8 @@ public class DealWriterServiceTests
             NullLogger<DealWriterService>.Instance,
             channel.Reader,
             repo,
+            new CircuitBreaker<int>("test-db", 5, TimeSpan.FromSeconds(30), NullLogger.Instance),
+            new ServiceHealthTracker(),
             dbEnabled: false);
 
         using var cts = new CancellationTokenSource();

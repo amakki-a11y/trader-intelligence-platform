@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Channels;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
@@ -140,18 +141,37 @@ try
     var dbFactory = new DbConnectionFactory(dbEnabled ? connString : "Host=localhost;Database=tip");
     builder.Services.AddSingleton(dbFactory);
 
+    // ── Resilience: Circuit Breakers + Health Tracker ─────────────────────
+    var serviceHealthTracker = new TIP.Core.Resilience.ServiceHealthTracker();
+    builder.Services.AddSingleton(serviceHealthTracker);
+
+    builder.Services.AddSingleton(sp => new TIP.Core.Resilience.CircuitBreaker<int>(
+        "database", failureThreshold: 5, openDuration: TimeSpan.FromSeconds(30),
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger("CircuitBreaker.Database")));
+
+    builder.Services.AddSingleton(sp => new TIP.Core.Resilience.CircuitBreaker<List<RawDeal>>(
+        "mt5-history", failureThreshold: 3, openDuration: TimeSpan.FromSeconds(60),
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger("CircuitBreaker.MT5History")));
+
     // Register connector services
     builder.Services.AddSingleton<DealSink>();
     builder.Services.AddSingleton<TickListener>();
     builder.Services.AddSingleton(sp => new SyncStateTracker(
         sp.GetRequiredService<ILogger<SyncStateTracker>>(),
         dbEnabled ? connString : null));
-    builder.Services.AddSingleton<HistoryFetcher>();
+    builder.Services.AddSingleton(sp => new HistoryFetcher(
+        sp.GetRequiredService<ILogger<HistoryFetcher>>(),
+        sp.GetRequiredService<IMT5Api>(),
+        sp.GetRequiredService<System.Threading.Channels.ChannelWriter<DealEvent>>(),
+        sp.GetRequiredService<System.Threading.Channels.ChannelWriter<TickEvent>>(),
+        sp.GetRequiredService<SyncStateTracker>(),
+        sp.GetRequiredService<TIP.Core.Resilience.CircuitBreaker<List<RawDeal>>>()));
     builder.Services.AddSingleton<PipelineOrchestrator>();
     builder.Services.AddHostedService<MT5Connection>();
 
     // Register deal processor (pure logic, no I/O)
-    builder.Services.AddSingleton<DealProcessor>();
+    builder.Services.AddSingleton(sp => new DealProcessor(
+        sp.GetRequiredService<ILogger<DealProcessor>>()));
 
     // Register repositories
     builder.Services.AddSingleton(sp => new TickWriter(
@@ -172,12 +192,16 @@ try
         sp.GetRequiredService<ILogger<TickWriterService>>(),
         tickWriterChannel.Reader,
         sp.GetRequiredService<TickWriter>(),
+        sp.GetRequiredService<TIP.Core.Resilience.CircuitBreaker<int>>(),
+        serviceHealthTracker,
         dbEnabled));
 
     builder.Services.AddHostedService(sp => new DealWriterService(
         sp.GetRequiredService<ILogger<DealWriterService>>(),
         dealWriterChannel.Reader,
         sp.GetRequiredService<DealRepository>(),
+        sp.GetRequiredService<TIP.Core.Resilience.CircuitBreaker<int>>(),
+        serviceHealthTracker,
         dbEnabled,
         dealBatchSize,
         dealFlushMs));
@@ -243,7 +267,8 @@ try
         sp.GetRequiredService<ExposureEngine>(),
         sp.GetRequiredService<IWebSocketBroadcaster>(),
         sp.GetRequiredService<PriceCache>(),
-        sp.GetRequiredService<SymbolCache>()));
+        sp.GetRequiredService<SymbolCache>(),
+        serviceHealthTracker));
 
     builder.Services.AddHostedService(sp => new ComputeEngineService(
         sp.GetRequiredService<ILogger<ComputeEngineService>>(),
@@ -257,6 +282,7 @@ try
         sp.GetRequiredService<IWebSocketBroadcaster>(),
         sp.GetRequiredService<AccountRepository>(),
         sp.GetRequiredService<TIP.Data.DealRepository>(),
+        serviceHealthTracker,
         dbEnabled));
 
     // ── Intelligence Engines (Phase 5) ──────────────────────────────────────
@@ -272,12 +298,14 @@ try
         sp.GetRequiredService<BookRouter>(),
         sp.GetRequiredService<PipelineOrchestrator>(),
         sp.GetRequiredService<TraderProfileRepository>(),
+        serviceHealthTracker,
         dbEnabled));
 
     var app = builder.Build();
 
     // ── Middleware Pipeline ───────────────────────────────────────────────────
 
+    app.UseMiddleware<TIP.Api.Middleware.GlobalExceptionMiddleware>();
     app.UseSerilogRequestLogging();
     app.UseCors();
     app.UseWebSockets();
@@ -293,36 +321,60 @@ try
         PnLEngine pnlEngine,
         ExposureEngine exposureEngine,
         AccountScorer accountScorer,
-        CorrelationEngine correlationEngine) => Results.Ok(new
+        CorrelationEngine correlationEngine,
+        TIP.Core.Resilience.CircuitBreaker<int> dbCb,
+        TIP.Core.Resilience.CircuitBreaker<List<RawDeal>> mt5Cb) =>
     {
-        status = "healthy",
-        timestamp = DateTimeOffset.UtcNow,
-        version = "2.0.0-alpha",
-        mt5Connected = api.IsConnected,
-        cachedSymbols = ticks.CachedSymbolCount,
-        ticksIngested = tw.TotalWritten,
-        tickFlushes = tw.TotalFlushed,
-        ticksBuffered = tw.BufferedCount,
-        dbEnabled,
-        pipeline = new
+        // Build service health snapshot
+        var allMetrics = serviceHealthTracker.GetAll();
+        var serviceStats = new Dictionary<string, object>();
+        foreach (var kvp in allMetrics)
         {
-            state = orchestrator.State.ToString(),
-            backfilledDeals = orchestrator.BackfilledDeals,
-            backfilledTicks = orchestrator.BackfilledTicks,
-            bufferedReplayed = orchestrator.BufferedReplayed,
-            duplicatesSkipped = orchestrator.DuplicatesSkipped
-        },
-        compute = new
-        {
-            trackedPositions = pnlEngine.TrackedPositionCount,
-            totalUnrealizedPnL = pnlEngine.TotalUnrealizedPnL,
-            exposureSymbols = exposureEngine.SymbolCount,
-            scoredAccounts = accountScorer.AccountCount,
-            riskCounts = accountScorer.GetRiskCounts(),
-            correlationPairs = correlationEngine.PairCount,
-            indexedFingerprints = correlationEngine.IndexedCount
+            serviceStats[kvp.Key] = new
+            {
+                consecutiveErrors = kvp.Value.GetConsecutiveErrors(),
+                totalProcessed = kvp.Value.GetTotalProcessed()
+            };
         }
-    }));
+
+        return Results.Ok(new
+        {
+            status = "healthy",
+            timestamp = DateTimeOffset.UtcNow,
+            version = "2.0.0-alpha",
+            mt5Connected = api.IsConnected,
+            cachedSymbols = ticks.CachedSymbolCount,
+            ticksIngested = tw.TotalWritten,
+            tickFlushes = tw.TotalFlushed,
+            ticksBuffered = tw.BufferedCount,
+            dbEnabled,
+            circuits = new
+            {
+                database = dbCb.State.ToString(),
+                mt5History = mt5Cb.State.ToString()
+            },
+            services = serviceStats,
+            pipeline = new
+            {
+                state = orchestrator.State.ToString(),
+                backfilledDeals = orchestrator.BackfilledDeals,
+                backfilledTicks = orchestrator.BackfilledTicks,
+                bufferedReplayed = orchestrator.BufferedReplayed,
+                duplicatesSkipped = orchestrator.DuplicatesSkipped
+            },
+            compute = new
+            {
+                trackedPositions = pnlEngine.TrackedPositionCount,
+                totalUnrealizedPnL = pnlEngine.TotalUnrealizedPnL,
+                exposureSymbols = exposureEngine.SymbolCount,
+                scoredAccounts = accountScorer.AccountCount,
+                riskCounts = accountScorer.GetRiskCounts(),
+                correlationPairs = correlationEngine.PairCount,
+                indexedFingerprints = correlationEngine.IndexedCount,
+                maxFingerprints = correlationEngine.MaxFingerprints
+            }
+        });
+    });
 
     // ── WebSocket Endpoint ────────────────────────────────────────────────
 

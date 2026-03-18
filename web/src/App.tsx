@@ -1,5 +1,53 @@
-import { Fragment, useState, useEffect, useMemo, useRef, useCallback, type CSSProperties, type ReactNode } from "react";
+import React, { Fragment, useState, useEffect, useMemo, useRef, useCallback, Component, type CSSProperties, type ReactNode } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+
+// ─── ErrorBoundary ──────────────────────────────────────────────
+// React error boundary that catches render errors in any child subtree.
+// Must be a class component — React doesn't support error boundaries via hooks.
+interface ErrorBoundaryProps { children: ReactNode; name: string }
+interface ErrorBoundaryState { hasError: boolean; error: Error | null }
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error(`[ErrorBoundary:${this.props.name}]`, error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          margin: 16, padding: 24, borderRadius: 8,
+          background: "#1a1625", border: "1px solid #ff4757",
+          fontFamily: "'JetBrains Mono', monospace",
+        }}>
+          <div style={{ color: "#ff4757", fontSize: 14, fontWeight: 700, marginBottom: 8 }}>
+            Something went wrong in {this.props.name}
+          </div>
+          <div style={{ color: "#8b8b9e", fontSize: 11, marginBottom: 16 }}>
+            {this.state.error?.message ?? "Unknown error"}
+          </div>
+          <button
+            onClick={() => this.setState({ hasError: false, error: null })}
+            style={{
+              padding: "6px 16px", borderRadius: 5, cursor: "pointer",
+              border: "1px solid #ff4757", background: "rgba(255,71,87,0.1)",
+              color: "#ff4757", fontSize: 11, fontWeight: 600,
+            }}
+          >
+            RELOAD PANEL
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ─── Types ─────────────────────────────────────────────────────
 interface Threats { ring: number; latency: number; bonus: number; bot: number }
@@ -981,7 +1029,7 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState(-1);
   const [advanced, setAdvanced] = useState(false);
-  const [wsStatus, setWsStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
+  const [wsStatus, setWsStatus] = useState<"disconnected" | "connecting" | "connected" | "reconnecting">("disconnected");
   const wsRef = useRef<WebSocket | null>(null);
   const marketDataRef = useRef(marketData);
   marketDataRef.current = marketData;
@@ -1083,15 +1131,19 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
   }, []);
 
   // WebSocket — zero delay live price stream (no polling, no throttle)
+  // Includes stale connection detection: if no message for 30s while "connected", force reconnect
   useEffect(() => {
     let reconnectTimer: ReturnType<typeof setTimeout>;
+    let staleCheckTimer: ReturnType<typeof setInterval>;
     let ws: WebSocket;
+    let lastMessageAt = Date.now();
 
     const connect = () => {
       setWsStatus("connecting");
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       ws = new WebSocket(`${proto}//${window.location.host}/ws`);
       wsRef.current = ws;
+      lastMessageAt = Date.now();
 
       ws.onopen = () => {
         setWsStatus("connected");
@@ -1099,6 +1151,7 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
       };
 
       ws.onmessage = (ev) => {
+        lastMessageAt = Date.now();
         try {
           const msg = JSON.parse(ev.data) as { type: string; data: { symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number; digits: number } };
           if (msg.type === "prices" && msg.data) {
@@ -1122,9 +1175,19 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
       ws.onerror = () => { ws.close(); };
     };
 
+    // Stale connection detector — force reconnect if no message for 30s
+    staleCheckTimer = setInterval(() => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && Date.now() - lastMessageAt > 30000) {
+        console.warn("[WS] Stale connection detected (no message for 30s) — forcing reconnect");
+        setWsStatus("reconnecting");
+        wsRef.current.close();
+      }
+    }, 5000);
+
     connect();
     return () => {
       clearTimeout(reconnectTimer);
+      clearInterval(staleCheckTimer);
       ws?.close();
       wsRef.current = null;
       setWsStatus("disconnected");
@@ -1291,7 +1354,7 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
       </div>
       <div style={{ padding: "8px 16px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 20, alignItems: "center" }}>
         <span style={{ fontSize: 10, color: C.t3, fontFamily: "'JetBrains Mono',monospace" }}>
-          {wsStatus === "connected" ? "🟢 LIVE" : wsStatus === "connecting" ? "🟡 CONNECTING" : "⚫ OFFLINE"} — MT5 PRICES
+          {wsStatus === "connected" ? "🟢 LIVE" : wsStatus === "reconnecting" ? "🟠 RECONNECTING" : wsStatus === "connecting" ? "🟡 CONNECTING" : "⚫ OFFLINE"} — MT5 PRICES
         </span>
         <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.teal }}>{priceCount}/{watchlist.length} symbols with data</span>
       </div>
@@ -1719,14 +1782,14 @@ export default function App() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <TopBar view={view} accounts={accounts} version={version} isLive={isLive} onToggleLive={() => setIsLive(v => !v)} />
         {selectedAccount ? (
-          <AccountDetail account={selectedAccount} version={version} onBack={() => setSelectedAccount(null)} />
+          <ErrorBoundary name="AccountDetail"><AccountDetail account={selectedAccount} version={version} onBack={() => setSelectedAccount(null)} /></ErrorBoundary>
         ) : (
           <>
-            {view === "grid" && <AccountGrid accounts={accounts} version={version} onSelect={handleSelect} flashRows={flashRows} />}
-            {view === "live" && <LiveMonitor accounts={accounts} isLive={isLive} onSelect={handleSelect} />}
-            {view === "market" && <MarketWatch isLive={isLive} />}
-            {view === "threats" && <ThreatView accounts={accounts} version={version} onSelect={handleSelect} />}
-            {view === "settings" && <SettingsView connectionStatus={connectionStatus} />}
+            {view === "grid" && <ErrorBoundary name="AbuseGrid"><AccountGrid accounts={accounts} version={version} onSelect={handleSelect} flashRows={flashRows} /></ErrorBoundary>}
+            {view === "live" && <ErrorBoundary name="LiveMonitor"><LiveMonitor accounts={accounts} isLive={isLive} onSelect={handleSelect} /></ErrorBoundary>}
+            {view === "market" && <ErrorBoundary name="MarketWatch"><MarketWatch isLive={isLive} /></ErrorBoundary>}
+            {view === "threats" && <ErrorBoundary name="ThreatView"><ThreatView accounts={accounts} version={version} onSelect={handleSelect} /></ErrorBoundary>}
+            {view === "settings" && <ErrorBoundary name="Settings"><SettingsView connectionStatus={connectionStatus} /></ErrorBoundary>}
           </>
         )}
         <div style={{

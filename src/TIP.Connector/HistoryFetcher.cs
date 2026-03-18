@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using TIP.Core.Resilience;
 
 namespace TIP.Connector;
 
@@ -18,6 +19,8 @@ namespace TIP.Connector;
 ///   the buffer→live transition.
 /// - Backfill runs once at startup (or on reconnect) to close any gaps since
 ///   the last checkpoint stored in SyncStateTracker.
+/// - Circuit breaker wraps each DealRequest call to prevent cascade failures
+///   when MT5 history API is unavailable.
 /// </summary>
 public sealed class HistoryFetcher : IDisposable
 {
@@ -26,6 +29,7 @@ public sealed class HistoryFetcher : IDisposable
     private readonly ChannelWriter<DealEvent> _dealWriter;
     private readonly ChannelWriter<TickEvent> _tickWriter;
     private readonly SyncStateTracker _syncTracker;
+    private readonly CircuitBreaker<List<RawDeal>>? _mt5HistoryCircuit;
     private readonly SemaphoreSlim _concurrencyLimiter = new(2, 2);
     private const int ChunkDelayMs = 500;
 
@@ -37,18 +41,21 @@ public sealed class HistoryFetcher : IDisposable
     /// <param name="dealWriter">Channel writer for deal events loaded from history.</param>
     /// <param name="tickWriter">Channel writer for tick events loaded from history.</param>
     /// <param name="syncTracker">Sync state tracker for checkpoint lookups.</param>
+    /// <param name="mt5HistoryCircuit">Circuit breaker for MT5 history API calls (optional).</param>
     public HistoryFetcher(
         ILogger<HistoryFetcher> logger,
         IMT5Api api,
         ChannelWriter<DealEvent> dealWriter,
         ChannelWriter<TickEvent> tickWriter,
-        SyncStateTracker syncTracker)
+        SyncStateTracker syncTracker,
+        CircuitBreaker<List<RawDeal>>? mt5HistoryCircuit = null)
     {
         _logger = logger;
         _api = api;
         _dealWriter = dealWriter;
         _tickWriter = tickWriter;
         _syncTracker = syncTracker;
+        _mt5HistoryCircuit = mt5HistoryCircuit;
     }
 
     /// <summary>
@@ -90,7 +97,24 @@ public sealed class HistoryFetcher : IDisposable
                 var from = lastSync ?? cutoffTime.AddDays(-90);
                 var to = cutoffTime;
 
-                var rawDeals = _api.RequestDeals(login, from, to);
+                IReadOnlyList<RawDeal> rawDeals;
+                if (_mt5HistoryCircuit != null)
+                {
+                    try
+                    {
+                        rawDeals = await _mt5HistoryCircuit.ExecuteAsync(() =>
+                            Task.FromResult(_api.RequestDeals(login, from, to))).ConfigureAwait(false);
+                    }
+                    catch (CircuitBreakerOpenException)
+                    {
+                        _logger.LogWarning("MT5 history circuit open — skipping backfill for login {Login}", login);
+                        continue;
+                    }
+                }
+                else
+                {
+                    rawDeals = _api.RequestDeals(login, from, to);
+                }
 
                 foreach (var raw in rawDeals)
                 {

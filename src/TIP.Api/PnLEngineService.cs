@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using TIP.Api.Hubs;
 using TIP.Connector;
 using TIP.Core.Engines;
+using TIP.Core.Resilience;
 
 namespace TIP.Api;
 
@@ -31,6 +32,7 @@ public sealed class PnLEngineService : BackgroundService
     private readonly IWebSocketBroadcaster _broadcaster;
     private readonly PriceCache _priceCache;
     private readonly SymbolCache _symbolCache;
+    private readonly ServiceHealthTracker _healthTracker;
     private readonly ConcurrentDictionary<string, double> _firstBid = new();
     private long _ticksProcessed;
 
@@ -45,7 +47,8 @@ public sealed class PnLEngineService : BackgroundService
         ExposureEngine exposureEngine,
         IWebSocketBroadcaster broadcaster,
         PriceCache priceCache,
-        SymbolCache symbolCache)
+        SymbolCache symbolCache,
+        ServiceHealthTracker healthTracker)
     {
         _logger = logger;
         _tickReader = tickReader;
@@ -55,6 +58,7 @@ public sealed class PnLEngineService : BackgroundService
         _broadcaster = broadcaster;
         _priceCache = priceCache;
         _symbolCache = symbolCache;
+        _healthTracker = healthTracker;
     }
 
     /// <summary>
@@ -79,23 +83,37 @@ public sealed class PnLEngineService : BackgroundService
         {
             await foreach (var tick in _tickReader.ReadAllAsync(stoppingToken).ConfigureAwait(false))
             {
-                _pnlEngine.OnTick(tick.Symbol, tick.Bid, tick.Ask);
-                Interlocked.Increment(ref _ticksProcessed);
+                try
+                {
+                    _pnlEngine.OnTick(tick.Symbol, tick.Bid, tick.Ask);
+                    Interlocked.Increment(ref _ticksProcessed);
 
-                // Update the shared price cache for REST API consumers
-                _priceCache.Update(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
+                    // Update the shared price cache for REST API consumers
+                    _priceCache.Update(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
 
-                // Track first bid for change calculation
-                _firstBid.TryAdd(tick.Symbol, tick.Bid);
-                var firstBid = _firstBid.GetOrAdd(tick.Symbol, tick.Bid);
-                var change = tick.Bid - firstBid;
-                var changePct = firstBid != 0 ? (change / firstBid) * 100.0 : 0;
+                    // Track first bid for change calculation
+                    _firstBid.TryAdd(tick.Symbol, tick.Bid);
+                    var firstBid = _firstBid.GetOrAdd(tick.Symbol, tick.Bid);
+                    var change = tick.Bid - firstBid;
+                    var changePct = firstBid != 0 ? (change / firstBid) * 100.0 : 0;
 
-                // Broadcast price to connected dashboards — includes digits for accurate frontend formatting
-                var digits = _symbolCache.GetDigits(tick.Symbol);
-                await _broadcaster.BroadcastPriceUpdate(new SymbolPriceDto(
-                    tick.Symbol, tick.Bid, tick.Ask, tick.Ask - tick.Bid,
-                    tick.TimeMsc, change, changePct, digits)).ConfigureAwait(false);
+                    // Broadcast price to connected dashboards — includes digits for accurate frontend formatting
+                    var digits = _symbolCache.GetDigits(tick.Symbol);
+                    await _broadcaster.BroadcastPriceUpdate(new SymbolPriceDto(
+                        tick.Symbol, tick.Bid, tick.Ask, tick.Ask - tick.Bid,
+                        tick.TimeMsc, change, changePct, digits)).ConfigureAwait(false);
+
+                    _healthTracker.RecordSuccess("pnlEngine");
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    var errors = _healthTracker.RecordError("pnlEngine");
+                    _logger.LogError(ex, "PnLEngineService loop iteration failed — continuing");
+                    if (errors >= 50)
+                    {
+                        _logger.LogCritical("PnLEngineService failing repeatedly — {Errors} consecutive errors — possible systemic issue", errors);
+                    }
+                }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

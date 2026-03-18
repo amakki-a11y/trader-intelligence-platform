@@ -150,7 +150,7 @@ public class PipelineOrchestratorTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+        await Assert.ThrowsExactlyAsync<TaskCanceledException>(
             () => orchestrator.StartPipeline(TestConfig, cts.Token));
 
         Assert.AreEqual(PipelineOrchestratorState.Disconnected, orchestrator.State);

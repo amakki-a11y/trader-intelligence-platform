@@ -252,3 +252,23 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 - **Latency test page**: `web/public/latency-test.html` — standalone diagnostic for comparing WS vs REST price latency for US30- and XAUUSD-.
 - `dotnet build` — zero warnings, zero errors
 - `npx tsc --noEmit` — zero errors
+
+### Phase 6, Task 29: Error Handling + Circuit Breakers — ✅ DONE (2026-03-18)
+- **CircuitBreaker\<T\>** (TIP.Core/Resilience): generic thread-safe circuit breaker with three states (Closed/Open/HalfOpen). Constructor: name, failureThreshold, openDuration. ExecuteAsync wraps any async call. On N consecutive failures → Open (reject fast). After openDuration → HalfOpen (one probe). Probe success → Closed. All transitions logged.
+- **ServiceHealthTracker** (TIP.Core/Resilience): singleton tracking per-service consecutive errors and total processed counts. Lock-free via Interlocked. Queried by /health endpoint.
+- **DB writes wrapped with circuit breaker**: TickWriterService and DealWriterService inject CircuitBreaker\<int\> ("database", threshold=5, open=30s). On open circuit, buffers accumulate and warning logged once/minute. No throw on CircuitBreakerOpenException.
+- **MT5 history wrapped with circuit breaker**: HistoryFetcher injects CircuitBreaker\<List\<RawDeal\>\> ("mt5-history", threshold=3, open=60s). On open circuit, skips backfill for that login and logs warning.
+- **MT5Connection max retries**: After 10 consecutive reconnect failures, logs CRITICAL "manual intervention required" and waits for config update via REST API. Resets on success or config change.
+- **GlobalExceptionMiddleware** (TIP.Api/Middleware): catches all unhandled controller exceptions, logs full stack trace via Serilog, returns `{ error, traceId }` with 500 status. Never leaks internal details. Registered BEFORE all other middleware.
+- **BackgroundService crash guards**: All 5 services (TickWriter, DealWriter, PnLEngine, ComputeEngine, Intelligence) have try/catch around inner loop body. Log error + continue. Consecutive error counter via ServiceHealthTracker: at 50 consecutive errors → CRITICAL warning "possible systemic issue".
+- **DealProcessor input validation**: ProcessDeal validates login > 0, symbol not null/empty for trade actions, timeMsc > 0. Invalid deals return PositionAction.Invalid (new enum value) instead of throwing. Added optional logger parameter.
+- **CorrelationEngine memory guard**: configurable maxFingerprints (default 500,000). Auto-prunes (24h cutoff) when IndexedCount >= limit. CheckDeal wrapped in try/catch — returns empty list on exception, never throws.
+- **Health endpoint hardened**: now includes `circuits` (database, mt5History states), `services` (per-service consecutiveErrors + totalProcessed), and `correlation.maxFingerprints`.
+- **Frontend ErrorBoundary**: React class component wrapping all major panels (AbuseGrid, LiveMonitor, MarketWatch, AccountDetail, ThreatView, Settings). Shows dark card with error message + RELOAD PANEL button. Logs error + component stack to console.
+- **WS stale connection detection**: MarketWatch tracks lastMessageAt timestamp. 5s interval check: if no message for 30s while connected → force reconnect. Shows "RECONNECTING" status in footer.
+- 18 new tests: CircuitBreakerTests (10), DealProcessorGuardTests (5), CorrelationEngineGuardTests (3)
+- Fixed pre-existing PipelineOrchestrator test (TaskCanceledException vs OperationCanceledException)
+- `dotnet build` — zero warnings, zero errors
+- `npx tsc --noEmit` — zero errors
+- All 161 tests passing (143 existing + 18 new)
+- **Phase 6, Task 29 COMPLETE.**
