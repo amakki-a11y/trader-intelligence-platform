@@ -105,6 +105,8 @@ public sealed class IntelligenceService : BackgroundService
             return;
         }
 
+        _logger.LogInformation("Intelligence cycle starting — {AccountCount} accounts to process", accounts.Count);
+
         var profileCount = 0;
         var aBookCount = 0;
         var bBookCount = 0;
@@ -115,7 +117,6 @@ public sealed class IntelligenceService : BackgroundService
             var style = _styleClassifier.Classify(account);
             var book = _bookRouter.Route(account, style);
 
-            // Update in-memory profile on AccountAnalysis (for future use)
             profileCount++;
 
             switch (book.Recommendation)
@@ -128,19 +129,41 @@ public sealed class IntelligenceService : BackgroundService
             // Persist to DB if enabled
             if (_dbEnabled)
             {
-                var profile = new TraderProfile
+                try
                 {
-                    Login = account.Login,
-                    Name = account.Name,
-                    Group = account.Group,
-                    Server = account.Server,
-                    Style = style.Style,
-                    Routing = book.Recommendation,
-                    RoutingConfidence = book.Confidence,
-                    LastUpdated = DateTimeOffset.UtcNow
-                };
+                    var profile = new TraderProfile
+                    {
+                        Login = account.Login,
+                        Name = account.Name,
+                        Group = account.Group,
+                        Server = account.Server,
+                        Style = style.Style,
+                        Routing = book.Recommendation,
+                        RoutingConfidence = book.Confidence,
+                        LastUpdated = DateTimeOffset.UtcNow
+                    };
 
-                await _profileRepository.UpsertAsync(profile).ConfigureAwait(false);
+                    await _profileRepository.UpsertAsync(profile).ConfigureAwait(false);
+                    _logger.LogDebug("Upserted profile for login {Login}: style={Style}, book={Book}",
+                        account.Login, style.Style, book.Recommendation);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to upsert trader profile for login {Login}", account.Login);
+                }
+
+                try
+                {
+                    await _profileRepository.InsertScoreHistoryAsync(
+                        account.Login, account.AbuseScore, account.RiskLevel.ToString(),
+                        account.IsRingMember, account.Server).ConfigureAwait(false);
+                    _logger.LogDebug("Saved score history for login {Login}: score={Score}",
+                        account.Login, account.AbuseScore);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to save score history for login {Login}", account.Login);
+                }
             }
         }
 

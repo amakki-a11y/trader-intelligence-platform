@@ -8,6 +8,7 @@ using TIP.Api.Hubs;
 using TIP.Connector;
 using TIP.Core.Engines;
 using TIP.Core.Models;
+using TIP.Data;
 
 namespace TIP.Api;
 
@@ -33,6 +34,8 @@ public sealed class ComputeEngineService : BackgroundService
     private readonly ExposureEngine _exposureEngine;
     private readonly PipelineOrchestrator _orchestrator;
     private readonly IWebSocketBroadcaster _broadcaster;
+    private readonly AccountRepository _accountRepository;
+    private readonly bool _dbEnabled;
     private long _dealsProcessed;
 
     /// <summary>
@@ -47,7 +50,9 @@ public sealed class ComputeEngineService : BackgroundService
         PnLEngine pnlEngine,
         ExposureEngine exposureEngine,
         PipelineOrchestrator orchestrator,
-        IWebSocketBroadcaster broadcaster)
+        IWebSocketBroadcaster broadcaster,
+        AccountRepository accountRepository,
+        bool dbEnabled)
     {
         _logger = logger;
         _dealReader = dealReader;
@@ -58,6 +63,8 @@ public sealed class ComputeEngineService : BackgroundService
         _exposureEngine = exposureEngine;
         _orchestrator = orchestrator;
         _broadcaster = broadcaster;
+        _accountRepository = accountRepository;
+        _dbEnabled = dbEnabled;
     }
 
     /// <summary>
@@ -109,6 +116,27 @@ public sealed class ComputeEngineService : BackgroundService
             deal.DealId, deal.Login, deal.Action, deal.Volume, deal.Profit,
             deal.Commission, deal.Swap, deal.ExpertId, deal.Reason,
             deal.TimeMsc, deal.Symbol, deal.PositionId);
+
+        // Step 2b: Persist account metadata to DB
+        if (_dbEnabled)
+        {
+            try
+            {
+                await _accountRepository.Upsert(new AccountRecord
+                {
+                    Login = account.Login,
+                    Name = account.Name,
+                    GroupName = account.Group,
+                    Balance = account.TotalDeposits,
+                    Equity = account.TotalDeposits + account.TotalProfit,
+                    Server = account.Server
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to upsert account {Login}", deal.Login);
+            }
+        }
 
         // Step 3: Check correlations for BUY/SELL trades
         if (result.Type == DealType.Buy || result.Type == DealType.Sell)

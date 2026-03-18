@@ -40,3 +40,9 @@ appsettings.Production.json
 *.pfx
 *.key
 .claude/
+
+# User secrets
+**/secrets.json
+
+# Development config overrides
+**/appsettings.Development.json

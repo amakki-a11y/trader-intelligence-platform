@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <DefineConstants>MT5_API_AVAILABLE</DefineConstants>
+    <UserSecretsId>tip-api-2026-a1b2c3d4-e5f6-7890-abcd-ef1234567890</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>

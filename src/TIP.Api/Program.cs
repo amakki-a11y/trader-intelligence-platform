@@ -36,6 +36,9 @@ try
     var builder = WebApplication.CreateBuilder(args);
     builder.Host.UseSerilog();
 
+    // Ensure user secrets are loaded (overrides appsettings.json placeholders)
+    builder.Configuration.AddUserSecrets(typeof(DealerHub).Assembly, optional: true);
+
     // ── Channel<T> Pipelines ──────────────────────────────────────────────────
 
     // Main ingest channels — DealSink and TickListener write here, fan-out service reads
@@ -247,7 +250,9 @@ try
         sp.GetRequiredService<PnLEngine>(),
         sp.GetRequiredService<ExposureEngine>(),
         sp.GetRequiredService<PipelineOrchestrator>(),
-        sp.GetRequiredService<IWebSocketBroadcaster>()));
+        sp.GetRequiredService<IWebSocketBroadcaster>(),
+        sp.GetRequiredService<AccountRepository>(),
+        dbEnabled));
 
     // ── Intelligence Engines (Phase 5) ──────────────────────────────────────
 

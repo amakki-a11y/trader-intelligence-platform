@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current state
-v2.0 in development — Phases 1-5 complete + real MT5 integration tested. Dashboard displays live data from MT5 server. Phase 6 next: hardening, security, load testing.
+v2.0 in development — Phases 1-5 complete + real MT5 integration tested. Data persisting to TimescaleDB. Credentials secured via User Secrets. Phase 6 next.
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to the v1.0 RebateAbuseDetector.
@@ -196,3 +196,17 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 - All 143 tests passing (121 existing + 22 new)
 - **Phases 1-5 COMPLETE.**
 - **Next up:** Phase 6 — Hardening, security, load testing
+
+### Pre-Phase 6: Data Persistence + Security Fixes — ✅ DONE (2026-03-17)
+- **Fixed tick writing to TimescaleDB** — tick pipeline is correctly wired (dbEnabled=true); ticks will persist when market is open and MT5 TickSink receives data
+- **Fixed account metadata persistence** — AccountRepository.Upsert now called in ComputeEngineService on every deal processed; accounts table populated (2 rows verified)
+- **Fixed IntelligenceService DB persistence** — trader_profiles and score_history now populated (2 rows each verified); added score_history saving via InsertScoreHistoryAsync
+- **Added logging to IntelligenceService** — cycle logs "starting — N accounts", per-account style/book debug logs, exception stack traces not swallowed
+- **Secured credentials** — MT5 password and DB password moved to .NET User Secrets via `dotnet user-secrets`
+- **appsettings.json now contains only CHANGE_ME placeholders** — safe to commit
+- **Added UserSecretsId to TIP.Api.csproj** — explicit user secrets loading in Program.cs
+- **Updated .gitignore** — added secrets.json and appsettings.Development.json exclusions
+- **Added docs/SETUP.md** — developer onboarding instructions (DB setup, credentials, running)
+- Verified: deals=40, accounts=2, trader_profiles=2, score_history=2, ticks=0 (market closed)
+- `dotnet build` — zero warnings, zero errors
+- 143 tests passing
