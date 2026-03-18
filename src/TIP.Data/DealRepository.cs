@@ -219,12 +219,19 @@ public sealed class DealRepository
     public async Task<List<DealRecord>> GetAllDealsAsync(CancellationToken cancellationToken = default)
     {
         var results = new List<DealRecord>();
+        var filterByServer = !string.IsNullOrEmpty(_serverName);
+
+        var sql = "SELECT deal_id, login, time, time_msc, symbol, action, volume, price, " +
+                  "profit, commission, swap, fee, reason, expert_id, comment, position_id, server " +
+                  "FROM deals" +
+                  (filterByServer ? " WHERE server = @server" : "") +
+                  " ORDER BY time ASC";
 
         await using var conn = await _dbFactory.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var cmd = new NpgsqlCommand(
-            "SELECT deal_id, login, time, time_msc, symbol, action, volume, price, " +
-            "profit, commission, swap, fee, reason, expert_id, comment, position_id, server " +
-            "FROM deals ORDER BY time ASC", conn);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+
+        if (filterByServer)
+            cmd.Parameters.AddWithValue("server", _serverName);
 
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -251,7 +258,8 @@ public sealed class DealRepository
             });
         }
 
-        _logger.LogInformation("GetAllDeals: loaded {Count} deals from database", results.Count);
+        _logger.LogInformation("GetAllDeals: loaded {Count} deals from database for server '{Server}'",
+            results.Count, filterByServer ? _serverName : "ALL");
         return results;
     }
 }

@@ -71,7 +71,8 @@ public sealed class PnLEngineService : BackgroundService
         // Wait for pipeline to reach at least BUFFERING state (ticks flow immediately)
         while (_orchestrator.State < PipelineOrchestratorState.Buffering && !stoppingToken.IsCancellationRequested)
         {
-            await Task.Delay(500, stoppingToken).ConfigureAwait(false);
+            try { await Task.Delay(500, stoppingToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
         }
 
         _logger.LogInformation("PnLEngineService active — processing ticks");

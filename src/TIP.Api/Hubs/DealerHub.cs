@@ -44,6 +44,9 @@ public sealed class DealerHub : IWebSocketBroadcaster
         /// <summary>Ensures only one write at a time per client (WebSocket is not concurrent-write-safe).</summary>
         public SemaphoreSlim WriteLock { get; } = new(1, 1);
 
+        /// <summary>Set when Dispose is called — guards against using WriteLock after disposal.</summary>
+        public volatile bool IsDisposed;
+
         public ClientState(WebSocket socket)
         {
             Socket = socket;
@@ -51,6 +54,7 @@ public sealed class DealerHub : IWebSocketBroadcaster
 
         public void Dispose()
         {
+            IsDisposed = true;
             WriteLock.Dispose();
         }
     }
@@ -207,8 +211,19 @@ public sealed class DealerHub : IWebSocketBroadcaster
             if (state.Subscriptions.Count > 0 && !state.Subscriptions.Contains(type))
                 continue;
 
+            // Skip clients that have been disposed (disconnected in another thread)
+            if (state.IsDisposed)
+            {
+                _clients.TryRemove(clientId, out _);
+                continue;
+            }
+
             // Acquire per-client write lock (skip if another write is in progress — don't block tick processing)
-            if (!await state.WriteLock.WaitAsync(0).ConfigureAwait(false))
+            bool lockAcquired;
+            try { lockAcquired = await state.WriteLock.WaitAsync(0).ConfigureAwait(false); }
+            catch (ObjectDisposedException) { _clients.TryRemove(clientId, out _); continue; }
+
+            if (!lockAcquired)
                 continue;
 
             try
@@ -220,11 +235,11 @@ public sealed class DealerHub : IWebSocketBroadcaster
             {
                 _clients.TryRemove(clientId, out _);
                 state.Dispose();
+                continue; // Skip finally Release — semaphore is disposed
             }
-            finally
-            {
-                state.WriteLock.Release();
-            }
+
+            try { state.WriteLock.Release(); }
+            catch (ObjectDisposedException) { /* already cleaned up */ }
         }
     }
 }

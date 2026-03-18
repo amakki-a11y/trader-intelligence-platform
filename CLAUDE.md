@@ -272,3 +272,15 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 - `npx tsc --noEmit` — zero errors
 - All 161 tests passing (143 existing + 18 new)
 - **Phase 6, Task 29 COMPLETE.**
+
+### Pre-Task 30: Server-Scoped DB Warmup Fix — ✅ DONE (2026-03-18)
+- **Fixed ghost account problem**: ComputeEngineService warmup was replaying 226K+ deals from a previous manager (login 1), creating ghost accounts not visible to current manager (login 1067).
+- **DealRepository.GetAllDealsAsync server filter**: now adds `WHERE server = @server` when `_serverName` is set (non-empty). Falls back to unfiltered query when empty (safe default).
+- **DI registration fix**: DealRepository now receives `connectionConfig.ServerAddress` from Program.cs at registration time (was missing before).
+- **Truncated stale dev data**: cleared deals, ticks, positions, accounts, score_history, correlation_pairs, trader_profiles, trading_metrics, alerts, sync_state.
+- **DealerHub ObjectDisposedException fix**: added `IsDisposed` flag to ClientState, guarded `WriteLock.WaitAsync`/`Release` against disposed semaphore during concurrent disconnects.
+- **CorrelationEngine.IndexedCount thread safety**: wrapped `_index.Values.Sum()` in try/catch for `InvalidOperationException` during concurrent modification.
+- **BackgroundService cancellation fixes**: wrapped `Task.Delay` wait-for-pipeline loops in try/catch for `OperationCanceledException` in IntelligenceService, ComputeEngineService, and PnLEngineService.
+- 2 new tests: DealRepositoryServerFilterTests (server-filtered + unfiltered queries)
+- `dotnet build` — zero warnings, zero errors
+- All 163 tests passing (161 existing + 2 new)

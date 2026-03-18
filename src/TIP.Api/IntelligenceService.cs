@@ -74,7 +74,8 @@ public sealed class IntelligenceService : BackgroundService
         // Wait for pipeline to reach at least LIVE state
         while (_orchestrator.State < PipelineOrchestratorState.Live && !stoppingToken.IsCancellationRequested)
         {
-            await Task.Delay(2000, stoppingToken).ConfigureAwait(false);
+            try { await Task.Delay(2000, stoppingToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
         }
 
         _logger.LogInformation("IntelligenceService active — running intelligence cycles every 5 minutes");

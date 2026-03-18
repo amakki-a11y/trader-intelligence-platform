@@ -182,7 +182,8 @@ try
 
     builder.Services.AddSingleton(sp => new DealRepository(
         sp.GetRequiredService<ILogger<DealRepository>>(),
-        dbFactory));
+        dbFactory,
+        connectionConfig.ServerAddress));
 
     builder.Services.AddSingleton<TraderProfileRepository>();
     builder.Services.AddSingleton<PositionRepository>();

@@ -89,7 +89,8 @@ public sealed class ComputeEngineService : BackgroundService
         // Wait for pipeline to reach at least BUFFERING state (deals flow during backfill too)
         while (_orchestrator.State < PipelineOrchestratorState.Buffering && !stoppingToken.IsCancellationRequested)
         {
-            await Task.Delay(500, stoppingToken).ConfigureAwait(false);
+            try { await Task.Delay(500, stoppingToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
         }
 
         _logger.LogInformation("ComputeEngineService active — processing deals");

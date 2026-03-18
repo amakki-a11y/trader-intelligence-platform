@@ -216,7 +216,14 @@ public sealed class CorrelationEngine
     /// <summary>
     /// Gets the total number of indexed fingerprints across all buckets.
     /// </summary>
-    public int IndexedCount => _index.Values.Sum(b => b.Count);
+    public int IndexedCount
+    {
+        get
+        {
+            try { return _index.Values.Sum(b => b.Count); }
+            catch (InvalidOperationException) { return 0; }
+        }
+    }
 
     /// <summary>
     /// Gets the number of distinct buckets in the index.
