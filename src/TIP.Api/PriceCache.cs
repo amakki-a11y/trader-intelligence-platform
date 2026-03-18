@@ -25,7 +25,11 @@ public sealed class PriceCache
     {
         var spread = ask - bid;
         _prices.AddOrUpdate(symbol,
-            _ => new CachedPrice(symbol, bid, ask, spread, timeMsc, bid, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
+            _ => new CachedPrice(symbol, bid, ask, spread, timeMsc, bid, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            {
+                SessionHighBid = bid,
+                SessionLowBid = bid
+            },
             (_, existing) =>
             {
                 var change = bid - existing.SessionOpenBid;
@@ -34,7 +38,9 @@ public sealed class PriceCache
                 {
                     Change = change,
                     ChangePercent = changePct,
-                    PreviousBid = existing.Bid
+                    PreviousBid = existing.Bid,
+                    SessionHighBid = Math.Max(existing.SessionHighBid, bid),
+                    SessionLowBid = existing.SessionLowBid > 0 ? Math.Min(existing.SessionLowBid, bid) : bid
                 };
             });
     }
@@ -105,4 +111,10 @@ public sealed record CachedPrice(
 
     /// <summary>Previous bid value for flash direction detection.</summary>
     public double PreviousBid { get; init; }
+
+    /// <summary>Session high bid price.</summary>
+    public double SessionHighBid { get; init; }
+
+    /// <summary>Session low bid price.</summary>
+    public double SessionLowBid { get; init; }
 }

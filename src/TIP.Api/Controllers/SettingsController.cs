@@ -72,14 +72,21 @@ public sealed class SettingsController : ControllerBase
         if (!ulong.TryParse(request.Login, out var login))
             return BadRequest(new { error = "Manager login must be a numeric value" });
 
-        if (string.IsNullOrWhiteSpace(request.Password))
-            return BadRequest(new { error = "Password is required" });
+        // If password is empty, reuse the stored password from current config (enables reconnect without re-entering)
+        var password = request.Password;
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            var stored = _connectionManager.CurrentConfig.Password;
+            if (string.IsNullOrWhiteSpace(stored) || stored == "CHANGE_ME")
+                return BadRequest(new { error = "Password is required (no stored credentials available)" });
+            password = stored;
+        }
 
         var groupMask = string.IsNullOrWhiteSpace(request.GroupMask) ? "*" : request.GroupMask;
 
         try
         {
-            _connectionManager.UpdateConfigAndReconnect(request.Server, login, request.Password, groupMask);
+            _connectionManager.UpdateConfigAndReconnect(request.Server, login, password, groupMask);
 
             _logger.LogInformation(
                 "Connection config updated via API: server={Server}, login={Login}",

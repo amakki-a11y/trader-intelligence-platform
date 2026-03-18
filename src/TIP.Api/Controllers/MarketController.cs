@@ -1,11 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using TIP.Connector;
+using TIP.Core.Engines;
 
 namespace TIP.Api.Controllers;
 
@@ -13,46 +10,50 @@ namespace TIP.Api.Controllers;
 /// REST API for real-time market data from the MT5 price feed.
 ///
 /// Design rationale:
-/// - Reads from PriceCache (populated by PnLEngineService on every tick).
-/// - Provides initial price snapshot for dashboard MarketWatch on page load.
-/// - After initial load, clients switch to WebSocket "prices" channel for live updates.
-/// - Supports filtering by symbol list to reduce payload for watchlist-based UIs.
+/// - Prices come exclusively from PriceCache, which is populated by live CIMTTickSink ticks.
+/// - No TickLast/TickStat polling — stale data and heavy MT5 API load eliminated.
+/// - SymbolCache provides symbol metadata (digits, description) loaded once on startup.
+/// - GET /api/market/prices: initial snapshot for dashboard page load; WebSocket takes over after.
+/// - GET /api/market/symbols: reads from SymbolCache (no per-request MT5 calls).
+/// - GET /api/market/volume: aggregates open position buy/sell/net per symbol.
 /// </summary>
 [ApiController]
 [Route("api/market")]
 public sealed class MarketController : ControllerBase
 {
     private readonly PriceCache _priceCache;
+    private readonly SymbolCache _symbolCache;
+    private readonly ExposureEngine _exposureEngine;
+    private readonly PnLEngine _pnlEngine;
     private readonly ILogger<MarketController> _logger;
 
     /// <summary>
-    /// Initializes the market controller with the shared price cache.
+    /// Initializes the market controller.
     /// </summary>
-    public MarketController(PriceCache priceCache, ILogger<MarketController> logger)
+    public MarketController(
+        PriceCache priceCache,
+        SymbolCache symbolCache,
+        ExposureEngine exposureEngine,
+        PnLEngine pnlEngine,
+        ILogger<MarketController> logger)
     {
         _priceCache = priceCache;
+        _symbolCache = symbolCache;
+        _exposureEngine = exposureEngine;
+        _pnlEngine = pnlEngine;
         _logger = logger;
     }
 
     /// <summary>
     /// Gets current prices for the specified symbols (or all cached symbols if none specified).
+    /// Includes digits per symbol for accurate frontend formatting.
     /// </summary>
-    /// <param name="symbols">Comma-separated list of symbol names (e.g., "XAUUSD,EURUSD,GBPUSD").</param>
-    /// <returns>List of current prices with bid, ask, spread, change data.</returns>
     [HttpGet("prices")]
     public IActionResult GetPrices([FromQuery] string? symbols = null)
     {
-        List<CachedPrice> prices;
-
-        if (!string.IsNullOrWhiteSpace(symbols))
-        {
-            var symbolList = symbols.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            prices = _priceCache.Get(symbolList);
-        }
-        else
-        {
-            prices = _priceCache.GetAll();
-        }
+        var prices = string.IsNullOrWhiteSpace(symbols)
+            ? _priceCache.GetAll()
+            : _priceCache.Get(symbols.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
         var result = prices.Select(p => new
         {
@@ -63,119 +64,84 @@ public sealed class MarketController : ControllerBase
             p.Change,
             p.ChangePercent,
             p.TimeMsc,
-            p.PreviousBid
+            p.PreviousBid,
+            p.SessionHighBid,
+            p.SessionLowBid,
+            Digits = _symbolCache.GetDigits(p.Symbol)
         }).ToList();
 
         return Ok(result);
     }
 
     /// <summary>
-    /// Gets the count of symbols currently in the price cache.
-    /// Useful for health checks and debugging.
+    /// Gets the count of symbols currently in the price cache and symbol metadata cache.
     /// </summary>
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
         return Ok(new
         {
-            cachedSymbols = _priceCache.Count,
+            cachedPrices = _priceCache.Count,
+            cachedSymbols = _symbolCache.Count,
             timestamp = DateTimeOffset.UtcNow
         });
     }
 
     /// <summary>
-    /// Fetches the last known tick directly from MT5 for specified symbols.
-    /// Tries TickLast first, falls back to TickStat if TickLast returns no data.
-    /// Also seeds the price cache for any symbol with valid data.
+    /// Gets buy/sell/net volume per symbol from open positions, plus top buyer and seller.
+    /// Used by MarketWatch to show real-time volume data alongside prices.
     /// </summary>
-    [HttpGet("tick-last")]
-    public IActionResult GetTickLast([FromQuery] string symbols)
+    [HttpGet("volume")]
+    public IActionResult GetVolume()
     {
-        if (string.IsNullOrWhiteSpace(symbols))
-            return BadRequest("symbols parameter required");
+        var allPositions = _pnlEngine.GetAllPositions();
 
-        var api = HttpContext.RequestServices.GetRequiredService<IMT5Api>();
-        var symbolList = symbols.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        var results = new List<object>();
-        foreach (var sym in symbolList)
-        {
-            try
+        var bySymbol = allPositions
+            .GroupBy(p => p.Symbol)
+            .Select(g =>
             {
-                // Try TickLast first (most recent tick)
-                var tick = api.GetTickLast(sym);
-                if (tick != null && tick.Bid > 0)
+                var buys = g.Where(p => p.Direction == 0).ToList();
+                var sells = g.Where(p => p.Direction == 1).ToList();
+
+                var buyVol = buys.Sum(p => p.Volume);
+                var sellVol = sells.Sum(p => p.Volume);
+
+                var topBuyer = buys
+                    .GroupBy(p => p.Login)
+                    .Select(lg => new { login = lg.Key, volume = lg.Sum(p => p.Volume) })
+                    .OrderByDescending(x => x.volume)
+                    .FirstOrDefault();
+
+                var topSeller = sells
+                    .GroupBy(p => p.Login)
+                    .Select(lg => new { login = lg.Key, volume = lg.Sum(p => p.Volume) })
+                    .OrderByDescending(x => x.volume)
+                    .FirstOrDefault();
+
+                return new
                 {
-                    _priceCache.Update(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
-                    results.Add(new { symbol = sym, bid = tick.Bid, ask = tick.Ask, timeMsc = tick.TimeMsc, source = "tick_last", status = "ok" });
-                    continue;
-                }
+                    symbol = g.Key,
+                    buyVolume = Math.Round(buyVol, 2),
+                    sellVolume = Math.Round(sellVol, 2),
+                    netVolume = Math.Round(buyVol - sellVol, 2),
+                    topBuyer = new { login = topBuyer?.login ?? 0UL, volume = Math.Round(topBuyer?.volume ?? 0, 2) },
+                    topSeller = new { login = topSeller?.login ?? 0UL, volume = Math.Round(topSeller?.volume ?? 0, 2) }
+                };
+            })
+            .OrderByDescending(v => Math.Abs(v.netVolume))
+            .ToList();
 
-                // Fall back to TickStat (session statistics — available even without recent ticks)
-                var stat = api.GetTickStat(sym);
-                if (stat != null && stat.Bid > 0)
-                {
-                    _priceCache.Update(stat.Symbol, stat.Bid, stat.Ask, stat.TimeMsc);
-                    results.Add(new { symbol = sym, bid = stat.Bid, ask = stat.Ask, timeMsc = stat.TimeMsc, source = "tick_stat", status = "ok" });
-                    continue;
-                }
-
-                results.Add(new { symbol = sym, bid = 0.0, ask = 0.0, timeMsc = 0L, source = "none", status = "no_data" });
-            }
-            catch (Exception ex)
-            {
-                results.Add(new { symbol = sym, bid = 0.0, ask = 0.0, timeMsc = 0L, source = "error", status = ex.Message });
-            }
-        }
-
-        return Ok(results);
+        return Ok(bySymbol);
     }
 
     /// <summary>
-    /// Fetches last known ticks for ALL symbols via the batch MT5 TickLast API.
-    /// Returns every symbol the MT5 pump has price data for.
-    /// Also seeds the price cache for all returned symbols.
-    /// </summary>
-    [HttpGet("tick-batch")]
-    public IActionResult GetTickBatch()
-    {
-        var api = HttpContext.RequestServices.GetRequiredService<IMT5Api>();
-        var ticks = api.GetTickLastBatch();
-
-        foreach (var tick in ticks)
-        {
-            if (tick.Bid > 0)
-                _priceCache.Update(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
-        }
-
-        var result = ticks.Select(t => new
-        {
-            symbol = t.Symbol,
-            bid = t.Bid,
-            ask = t.Ask,
-            timeMsc = t.TimeMsc
-        }).ToList();
-
-        return Ok(new { count = result.Count, ticks = result });
-    }
-
-    /// <summary>
-    /// Gets all available symbol names from the MT5 server.
-    /// Used by the frontend to populate the symbol search/add feature.
+    /// Gets all available symbol names and metadata from the SymbolCache (loaded once on startup).
+    /// No MT5 API call per request — reads from in-memory cache only.
     /// </summary>
     [HttpGet("symbols")]
     public IActionResult GetSymbols([FromQuery] string? search = null)
     {
-        var api = HttpContext.RequestServices.GetRequiredService<IMT5Api>();
-        var symbols = api.GetSymbols();
-
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            symbols = symbols.Where(s =>
-                s.Symbol.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                s.Description.Contains(search, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-        }
+        var symbols = _symbolCache.GetAll(search);
 
         var result = symbols.Select(s => new
         {
@@ -185,7 +151,7 @@ public sealed class MarketController : ControllerBase
             s.ContractSize,
             s.CurrencyBase,
             s.CurrencyProfit
-        }).Take(200).ToList();
+        }).Take(500).ToList();
 
         return Ok(result);
     }

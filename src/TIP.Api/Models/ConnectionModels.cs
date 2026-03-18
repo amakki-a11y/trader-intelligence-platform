@@ -6,8 +6,8 @@ namespace TIP.Api.Models;
 public sealed record ConnectionConfigRequest(
     string Server,
     string Login,
-    string Password,
-    string GroupMask);
+    string? Password,
+    string? GroupMask);
 
 /// <summary>
 /// Response DTO for current connection configuration. Never includes password.

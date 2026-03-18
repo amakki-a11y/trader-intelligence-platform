@@ -16,12 +16,12 @@ public sealed record AccountSummaryDto(
     DateTimeOffset LastScored);
 
 /// <summary>
-/// Symbol price DTO pushed to MarketWatch clients on each throttled tick.
-/// Includes derived spread, change, and change-percent for display.
+/// Symbol price DTO pushed to MarketWatch clients on each tick.
+/// Includes spread, change, change-percent, and symbol digits for accurate price formatting.
 /// </summary>
 public sealed record SymbolPriceDto(
     string Symbol, double Bid, double Ask, double Spread,
-    long TimeMsc, double Change, double ChangePercent);
+    long TimeMsc, double Change, double ChangePercent, int Digits);
 
 /// <summary>
 /// Position summary DTO pushed for live P&amp;L tracking.

@@ -17,6 +17,7 @@ namespace TIP.Api.Hubs;
 /// - Clients send a subscribe message on connect: { "subscribe": ["prices","accounts",...] }
 /// - Only subscribed message types are pushed to each client (saves bandwidth).
 /// - Tracks clients via ConcurrentDictionary for thread-safe add/remove.
+/// - Per-client SemaphoreSlim ensures writes never overlap (WebSocket is not thread-safe for writes).
 /// - Prices are forwarded instantly with zero throttle for real-time accuracy.
 /// - Scores and alerts are sent immediately (low frequency, high importance).
 /// - All outbound messages follow: { "type": "prices"|"accounts"|"positions"|"alerts", "data": ... }
@@ -25,7 +26,6 @@ public sealed class DealerHub : IWebSocketBroadcaster
 {
     private readonly ILogger<DealerHub> _logger;
     private readonly ConcurrentDictionary<string, ClientState> _clients = new();
-    // Price throttle removed — ticks forwarded instantly for real-time accuracy
     private long _lastPositionBroadcast;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -34,16 +34,24 @@ public sealed class DealerHub : IWebSocketBroadcaster
     };
 
     /// <summary>
-    /// Tracks a single connected client's WebSocket and subscriptions.
+    /// Tracks a single connected client's WebSocket, subscriptions, and write lock.
     /// </summary>
-    private sealed class ClientState
+    private sealed class ClientState : IDisposable
     {
         public WebSocket Socket { get; }
         public HashSet<string> Subscriptions { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>Ensures only one write at a time per client (WebSocket is not concurrent-write-safe).</summary>
+        public SemaphoreSlim WriteLock { get; } = new(1, 1);
+
         public ClientState(WebSocket socket)
         {
             Socket = socket;
+        }
+
+        public void Dispose()
+        {
+            WriteLock.Dispose();
         }
     }
 
@@ -88,6 +96,7 @@ public sealed class DealerHub : IWebSocketBroadcaster
         finally
         {
             _clients.TryRemove(clientId, out _);
+            state.Dispose();
             _logger.LogInformation("WS client disconnected: {ClientId} ({Count} remaining)", clientId, _clients.Count);
 
             if (ws.State == WebSocketState.Open || ws.State == WebSocketState.CloseReceived)
@@ -122,7 +131,7 @@ public sealed class DealerHub : IWebSocketBroadcaster
                     if (!string.IsNullOrEmpty(channel))
                         state.Subscriptions.Add(channel);
                 }
-                _logger.LogDebug("Client {ClientId} subscribed to: {Subs}", clientId, string.Join(", ", state.Subscriptions));
+                _logger.LogInformation("Client {ClientId} subscribed to: {Subs}", clientId, string.Join(", ", state.Subscriptions));
             }
         }
         catch (JsonException)
@@ -174,6 +183,7 @@ public sealed class DealerHub : IWebSocketBroadcaster
 
     /// <summary>
     /// Sends a typed JSON message to all clients subscribed to the given channel.
+    /// Uses per-client write lock to prevent concurrent SendAsync calls.
     /// </summary>
     private async Task Broadcast(string type, object data)
     {
@@ -189,11 +199,16 @@ public sealed class DealerHub : IWebSocketBroadcaster
             if (state.Socket.State != WebSocketState.Open)
             {
                 _clients.TryRemove(clientId, out _);
+                state.Dispose();
                 continue;
             }
 
             // Only send if client subscribed to this channel (or has no subscriptions = all)
             if (state.Subscriptions.Count > 0 && !state.Subscriptions.Contains(type))
+                continue;
+
+            // Acquire per-client write lock (skip if another write is in progress — don't block tick processing)
+            if (!await state.WriteLock.WaitAsync(0).ConfigureAwait(false))
                 continue;
 
             try
@@ -204,6 +219,11 @@ public sealed class DealerHub : IWebSocketBroadcaster
             catch
             {
                 _clients.TryRemove(clientId, out _);
+                state.Dispose();
+            }
+            finally
+            {
+                state.WriteLock.Release();
             }
         }
     }

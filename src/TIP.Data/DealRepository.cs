@@ -211,4 +211,47 @@ public sealed class DealRepository
 
         return results;
     }
+
+    /// <summary>
+    /// Fetches all deals from the database ordered by time ascending.
+    /// Used on startup to warm up the AccountScorer with historical deals.
+    /// </summary>
+    public async Task<List<DealRecord>> GetAllDealsAsync(CancellationToken cancellationToken = default)
+    {
+        var results = new List<DealRecord>();
+
+        await using var conn = await _dbFactory.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = new NpgsqlCommand(
+            "SELECT deal_id, login, time, time_msc, symbol, action, volume, price, " +
+            "profit, commission, swap, fee, reason, expert_id, comment, position_id, server " +
+            "FROM deals ORDER BY time ASC", conn);
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            results.Add(new DealRecord
+            {
+                DealId = (ulong)reader.GetInt64(0),
+                Login = (ulong)reader.GetInt64(1),
+                TimeMsc = reader.GetInt64(3),
+                Symbol = reader.GetString(4),
+                Action = reader.GetInt16(5),
+                Volume = reader.GetDouble(6),
+                Price = reader.GetDouble(7),
+                Profit = reader.GetDouble(8),
+                Commission = reader.GetDouble(9),
+                Swap = reader.GetDouble(10),
+                Fee = reader.GetDouble(11),
+                Reason = reader.GetInt16(12),
+                ExpertId = (ulong)reader.GetInt64(13),
+                Comment = reader.GetString(14),
+                PositionId = (ulong)reader.GetInt64(15),
+                Server = reader.GetString(16)
+            });
+        }
+
+        _logger.LogInformation("GetAllDeals: loaded {Count} deals from database", results.Count);
+        return results;
+    }
 }

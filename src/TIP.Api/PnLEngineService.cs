@@ -30,6 +30,7 @@ public sealed class PnLEngineService : BackgroundService
     private readonly ExposureEngine _exposureEngine;
     private readonly IWebSocketBroadcaster _broadcaster;
     private readonly PriceCache _priceCache;
+    private readonly SymbolCache _symbolCache;
     private readonly ConcurrentDictionary<string, double> _firstBid = new();
     private long _ticksProcessed;
 
@@ -43,7 +44,8 @@ public sealed class PnLEngineService : BackgroundService
         PipelineOrchestrator orchestrator,
         ExposureEngine exposureEngine,
         IWebSocketBroadcaster broadcaster,
-        PriceCache priceCache)
+        PriceCache priceCache,
+        SymbolCache symbolCache)
     {
         _logger = logger;
         _tickReader = tickReader;
@@ -52,6 +54,7 @@ public sealed class PnLEngineService : BackgroundService
         _exposureEngine = exposureEngine;
         _broadcaster = broadcaster;
         _priceCache = priceCache;
+        _symbolCache = symbolCache;
     }
 
     /// <summary>
@@ -88,10 +91,11 @@ public sealed class PnLEngineService : BackgroundService
                 var change = tick.Bid - firstBid;
                 var changePct = firstBid != 0 ? (change / firstBid) * 100.0 : 0;
 
-                // Broadcast price to connected dashboards (throttled internally)
+                // Broadcast price to connected dashboards — includes digits for accurate frontend formatting
+                var digits = _symbolCache.GetDigits(tick.Symbol);
                 await _broadcaster.BroadcastPriceUpdate(new SymbolPriceDto(
                     tick.Symbol, tick.Bid, tick.Ask, tick.Ask - tick.Bid,
-                    tick.TimeMsc, change, changePct)).ConfigureAwait(false);
+                    tick.TimeMsc, change, changePct, digits)).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

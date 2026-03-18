@@ -229,6 +229,7 @@ try
     builder.Services.AddSingleton<AccountScorer>();
     builder.Services.AddSingleton<BotFingerprinter>();
     builder.Services.AddSingleton<PriceCache>();
+    builder.Services.AddSingleton<SymbolCache>();
     builder.Services.AddSingleton<DealerHub>();
     builder.Services.AddSingleton<IWebSocketBroadcaster>(sp => sp.GetRequiredService<DealerHub>());
 
@@ -241,7 +242,8 @@ try
         sp.GetRequiredService<PipelineOrchestrator>(),
         sp.GetRequiredService<ExposureEngine>(),
         sp.GetRequiredService<IWebSocketBroadcaster>(),
-        sp.GetRequiredService<PriceCache>()));
+        sp.GetRequiredService<PriceCache>(),
+        sp.GetRequiredService<SymbolCache>()));
 
     builder.Services.AddHostedService(sp => new ComputeEngineService(
         sp.GetRequiredService<ILogger<ComputeEngineService>>(),
@@ -254,6 +256,7 @@ try
         sp.GetRequiredService<PipelineOrchestrator>(),
         sp.GetRequiredService<IWebSocketBroadcaster>(),
         sp.GetRequiredService<AccountRepository>(),
+        sp.GetRequiredService<TIP.Data.DealRepository>(),
         dbEnabled));
 
     // ── Intelligence Engines (Phase 5) ──────────────────────────────────────
@@ -335,109 +338,73 @@ try
         await hub.HandleConnection(ws, context.RequestAborted);
     });
 
-    // ── Seed Price Cache from MT5 ──────────────────────────────────────────
-    // After pipeline connects, seed the price cache with last known symbol prices
+    // ── Load Symbol Metadata from MT5 (one-time, no price polling) ────────
+    // Prices come exclusively from live CIMTTickSink ticks via the pipeline.
+    // TickLast/TickStat are NOT called — stale data and heavy MT5 API load.
     _ = Task.Run(async () =>
     {
-        var priceCache = app.Services.GetRequiredService<PriceCache>();
+        var symbolCache = app.Services.GetRequiredService<SymbolCache>();
         var mt5Api = app.Services.GetRequiredService<IMT5Api>();
         var orchestrator = app.Services.GetRequiredService<PipelineOrchestrator>();
-        var logger = app.Services.GetRequiredService<ILogger<PriceCache>>();
+        var logger = app.Services.GetRequiredService<ILogger<SymbolCache>>();
 
         // Wait for pipeline to reach at least Buffering (MT5 connected)
         while (orchestrator.State < PipelineOrchestratorState.Buffering)
         {
-            await Task.Delay(1000);
+            await Task.Delay(500, app.Lifetime.ApplicationStopping);
         }
 
         try
         {
-            // Phase 1: Try batch TickLast — gets all symbols with pump data in one call
-            var batchTicks = mt5Api.GetTickLastBatch();
-            var seeded = 0;
-            foreach (var tick in batchTicks)
-            {
-                if (tick.Bid > 0)
-                {
-                    priceCache.Seed(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
-                    seeded++;
-                }
-            }
-
-            logger.LogInformation("PriceCache: Batch TickLast seeded {Count} symbols", seeded);
-
-            // Phase 2: For remaining symbols, try TickStat (has data even without recent ticks)
-            var allSymbols = mt5Api.GetSymbols();
-            var statSeeded = 0;
-            foreach (var rawSym in allSymbols)
-            {
-                // Skip if already seeded from batch
-                if (priceCache.Get(rawSym.Symbol) != null) continue;
-
-                try
-                {
-                    // Try TickLast first
-                    var tick = mt5Api.GetTickLast(rawSym.Symbol);
-                    if (tick != null && tick.Bid > 0)
-                    {
-                        priceCache.Seed(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
-                        statSeeded++;
-                        continue;
-                    }
-
-                    // Fall back to TickStat
-                    var stat = mt5Api.GetTickStat(rawSym.Symbol);
-                    if (stat != null && stat.Bid > 0)
-                    {
-                        priceCache.Seed(stat.Symbol, stat.Bid, stat.Ask, stat.TimeMsc);
-                        statSeeded++;
-                    }
-                }
-                catch
-                {
-                    // Skip symbols without any price data
-                }
-            }
-
-            logger.LogInformation(
-                "PriceCache: Seeded {Total} symbols total ({Batch} from batch, {Stat} from individual TickLast/TickStat)",
-                seeded + statSeeded, seeded, statSeeded);
+            var symbols = mt5Api.GetSymbols();
+            symbolCache.Load(symbols);
+            logger.LogInformation("SymbolCache: loaded {Count} symbols from MT5", symbolCache.Count);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "PriceCache: Failed to seed from MT5 symbols");
+            logger.LogWarning(ex, "SymbolCache: failed to load symbols from MT5");
         }
 
-        // Phase 3: Periodic refresh — poll every 30s for symbols that don't have live tick data
-        while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
+        // Load open positions from MT5 into PnLEngine for Market Watch volume data
+        try
         {
-            try
-            {
-                await Task.Delay(30000, app.Lifetime.ApplicationStopping);
+            var pnlEngine = app.Services.GetRequiredService<PnLEngine>();
+            var connMgr = app.Services.GetRequiredService<ConnectionManager>();
+            var groupMask = connMgr.CurrentConfig.GroupMask;
+            var logins = mt5Api.GetUserLogins(groupMask);
+            var allPositions = new List<OpenPosition>();
 
-                var batchRefresh = mt5Api.GetTickLastBatch();
-                var refreshed = 0;
-                foreach (var tick in batchRefresh)
+            foreach (var login in logins)
+            {
+                try
                 {
-                    if (tick.Bid > 0)
+                    var rawPositions = mt5Api.GetPositions(login);
+                    foreach (var rp in rawPositions)
                     {
-                        priceCache.Update(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
-                        refreshed++;
+                        allPositions.Add(new OpenPosition
+                        {
+                            PositionId = (long)rp.PositionId,
+                            Login = rp.Login,
+                            Symbol = rp.Symbol,
+                            Direction = (int)rp.Action,
+                            Volume = rp.Volume,
+                            OpenPrice = rp.PriceOpen,
+                        });
                     }
                 }
+                catch { /* skip logins without positions */ }
+            }
 
-                if (refreshed > priceCache.Count)
-                    logger.LogInformation("PriceCache: Batch refresh updated {Count} symbols (cache has {CacheCount})",
-                        refreshed, priceCache.Count);
-            }
-            catch (OperationCanceledException)
+            if (allPositions.Count > 0)
             {
-                break;
+                pnlEngine.Initialize(allPositions);
+                logger.LogInformation("PnLEngine: loaded {Count} open positions from {Logins} logins",
+                    allPositions.Count, logins.Length);
             }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "PriceCache: Refresh cycle failed");
-            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "PnLEngine: failed to load positions from MT5");
         }
     });
 

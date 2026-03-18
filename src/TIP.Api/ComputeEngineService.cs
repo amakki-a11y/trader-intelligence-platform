@@ -35,6 +35,7 @@ public sealed class ComputeEngineService : BackgroundService
     private readonly PipelineOrchestrator _orchestrator;
     private readonly IWebSocketBroadcaster _broadcaster;
     private readonly AccountRepository _accountRepository;
+    private readonly TIP.Data.DealRepository _dealRepository;
     private readonly bool _dbEnabled;
     private long _dealsProcessed;
 
@@ -52,6 +53,7 @@ public sealed class ComputeEngineService : BackgroundService
         PipelineOrchestrator orchestrator,
         IWebSocketBroadcaster broadcaster,
         AccountRepository accountRepository,
+        TIP.Data.DealRepository dealRepository,
         bool dbEnabled)
     {
         _logger = logger;
@@ -64,6 +66,7 @@ public sealed class ComputeEngineService : BackgroundService
         _orchestrator = orchestrator;
         _broadcaster = broadcaster;
         _accountRepository = accountRepository;
+        _dealRepository = dealRepository;
         _dbEnabled = dbEnabled;
     }
 
@@ -86,6 +89,32 @@ public sealed class ComputeEngineService : BackgroundService
         }
 
         _logger.LogInformation("ComputeEngineService active — processing deals");
+
+        // Warm up AccountScorer from historical deals in DB so accounts appear on startup
+        if (_dbEnabled)
+        {
+            try
+            {
+                var historicalDeals = await _dealRepository.GetAllDealsAsync(stoppingToken).ConfigureAwait(false);
+                var warmupCount = 0;
+                foreach (var deal in historicalDeals)
+                {
+                    _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId);
+                    _accountScorer.ProcessDeal(
+                        deal.DealId, deal.Login, deal.Action, deal.Volume, deal.Profit,
+                        deal.Commission, deal.Swap, deal.ExpertId, deal.Reason,
+                        deal.TimeMsc, deal.Symbol, deal.PositionId);
+                    warmupCount++;
+                }
+                _logger.LogInformation(
+                    "ComputeEngineService warmup: replayed {Count} historical deals, {Accounts} accounts scored",
+                    warmupCount, _accountScorer.GetAllAccountsSorted().Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "ComputeEngineService: warmup from DB failed — scorer starts empty");
+            }
+        }
 
         try
         {

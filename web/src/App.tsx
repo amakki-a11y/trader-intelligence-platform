@@ -21,7 +21,7 @@ interface OpenTrade {
   openPrice: number; currentPrice: number; profit: number; swap: number; sl: number; tp: number;
 }
 interface MoneyOp { id: number; time: string; type: string; amount: number; method: string; status: string }
-interface MarketDataPoint { symbol: string; bid: number; ask: number; spread: number; change24h: number }
+interface MarketDataPoint { symbol: string; bid: number; ask: number; spread: number; change24h: number; digits: number }
 interface LiveEvent {
   id: number; time: string; login: number; name: string; symbol: string; action: string;
   volume: number; score: number; scoreChange: number; isCorrelated: boolean;
@@ -32,57 +32,13 @@ interface VolumeData { buy: number; sell: number; net: number; topBuyer: { login
 // ─── Dummy Data ────────────────────────────────────────────────
 const SYMBOLS = ["XAUUSD","EURUSD","GBPUSD","USDJPY","BTCUSD","AUDUSD","USDCHF","NZDUSD","EURJPY","GBPJPY"];
 const DEFAULT_WATCHLIST = ["US30-","XAUUSD-","EURUSD-","GBPUSD-","USDJPY-","NZDUSD-","AUDUSD-","USDCAD-","GBPJPY-","EURJPY-","EURGBP-","BTCUSD-"];
-const IBS = ["IB-2201","IB-2202","IB-3301","IB-4401","IB-5501","IB-6601"];
 const EAS = [0, 77201, 77201, 88302, 99100, 0, 77201, 0, 88302, 0, 55010, 77201, 0, 88302, 0, 77201, 0, 99100];
-const GROUPS = ["forex\\retail\\standard","forex\\retail\\vip","forex\\retail\\micro","forex\\ib\\premium"];
-const NAMES = ["Ahmad K.","Maria S.","John D.","Chen W.","Fatima R.","Boris P.","Yuki T.","Carlos M.","Priya G.","Alex V.","Hassan N.","Elena K.","David L.","Sofia B.","Omar J.","Ling Z.","Pavel D.","Nadia F.","James H.","Aisha M."];
 
 const randBetween = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a;
 const randFloat = (a: number, b: number, d = 2) => +(Math.random() * (b - a) + a).toFixed(d);
 const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]!;
-const severity = (s: number) => s >= 70 ? "CRITICAL" : s >= 50 ? "HIGH" : s >= 30 ? "MEDIUM" : "LOW";
 const sevColor = (s: number) => s >= 70 ? "#FF5252" : s >= 50 ? "#FF7B6B" : s >= 30 ? "#FFBA42" : "#3DD9A0";
 
-
-function generateAccounts(n = 20): Account[] {
-  const accounts: Account[] = [];
-  const ringIB = "IB-2201";
-  const ringEA = 77201;
-  for (let i = 0; i < n; i++) {
-    const login = 50001 + i;
-    const isRing = i < 3;
-    const score = isRing ? randBetween(65, 92) : (i < 6 ? randBetween(45, 68) : (i < 12 ? randBetween(25, 48) : randBetween(5, 28)));
-    const deps = randBetween(3, 25);
-    const totalDep = randFloat(500, 50000, 0);
-    const bonuses = randFloat(0, totalDep * 0.6, 0);
-    const volume = randFloat(1, 800, 1);
-    const commissions = +(volume * randFloat(3.5, 7, 2)).toFixed(0);
-    const pnl = randFloat(-5000, 8000, 0);
-    const tradeCount = randBetween(40, 2000);
-    const expertRatio = isRing ? randFloat(0.85, 0.99) : randFloat(0, 0.95);
-    const ib = isRing ? ringIB : pick(IBS);
-    const ea = isRing ? ringEA : pick(EAS);
-    accounts.push({
-      login, name: NAMES[i % NAMES.length]!, group: pick(GROUPS), score, sev: severity(score),
-      deposits: deps, totalDeposited: +totalDep, bonuses: +bonuses, volume, commissions,
-      pnl: +pnl, tradeCount, expertRatio, ib, primaryEA: ea,
-      avgHoldSec: isRing ? randFloat(2, 15, 1) : randFloat(30, 7200, 0),
-      winRate: randFloat(0.3, 0.75), tradesPerHour: isRing ? randFloat(20, 80, 1) : randFloat(0.5, 10, 1),
-      timingCV: isRing ? randFloat(0.02, 0.12) : randFloat(0.3, 2.5),
-      isRingMember: isRing, ringPartners: isRing ? [50001, 50002, 50003].filter(l => l !== login) : [],
-      bonusToDepRatio: bonuses > 0 ? +(bonuses / totalDep).toFixed(2) : 0,
-      lastActivity: new Date(Date.now() - randBetween(0, 86400000 * 7)).toISOString(),
-      threats: {
-        ring: isRing ? randFloat(0.7, 0.98) : (i < 5 ? randFloat(0.1, 0.4) : 0),
-        latency: i === 3 || i === 7 ? randFloat(0.6, 0.9) : randFloat(0, 0.3),
-        bonus: i === 4 || i === 8 ? randFloat(0.5, 0.85) : randFloat(0, 0.25),
-        bot: isRing || i === 5 ? randFloat(0.6, 0.95) : randFloat(0, 0.35),
-      },
-      routing: score >= 60 ? "A-Book" : (score >= 35 ? "Review" : "B-Book"),
-    });
-  }
-  return accounts.sort((a, b) => b.score - a.score);
-}
 
 // @ts-ignore — kept for v1 fallback mode
 function generateDeals(login: number, count = 50): Deal[] {
@@ -1031,26 +987,23 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
   marketDataRef.current = marketData;
   const toggleSort = (col: string) => { if (sortCol === col) setSortDir(d => d * -1); else { setSortCol(col); setSortDir(-1); } };
 
-  const volumeBySymbol = useMemo(() => {
-    const vols: Record<string, VolumeData> = {};
-    watchlist.forEach(sym => {
-      vols[sym] = { buy: 0, sell: 0, net: 0, topBuyer: { login: 0, volume: 0 }, topSeller: { login: 0, volume: 0 } };
-    });
-    return vols;
-  }, [watchlist]);
+  const [volumeBySymbol, setVolumeBySymbol] = useState<Record<string, VolumeData>>({});
+
+  const [sessionHighLow, setSessionHighLow] = useState<Record<string, { high: number; low: number }>>({});
 
   const advancedData = useMemo(() => {
     const data: Record<string, { low: number; high: number }> = {};
     watchlist.forEach(sym => {
-      const md = marketData[sym];
-      if (md && md.bid > 0) {
-        data[sym] = { low: md.bid, high: md.ask };
+      const hl = sessionHighLow[sym];
+      if (hl && hl.high > 0) {
+        data[sym] = { low: hl.low, high: hl.high };
       } else {
-        data[sym] = { low: 0, high: 0 };
+        const md = marketData[sym];
+        data[sym] = md && md.bid > 0 ? { low: md.bid, high: md.ask } : { low: 0, high: 0 };
       }
     });
     return data;
-  }, [watchlist, marketData]);
+  }, [watchlist, marketData, sessionHighLow]);
 
   // Load available symbols from MT5 (for the add symbol search)
   useEffect(() => {
@@ -1064,18 +1017,69 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
   useEffect(() => {
     fetch("/api/market/prices")
       .then(r => r.ok ? r.json() : [])
-      .then((prices: Array<{ symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number }>) => {
+      .then((prices: Array<{ symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number; digits: number }>) => {
         setMarketData(prev => {
           const next = { ...prev };
           for (const p of prices) {
             if (p.bid > 0) {
-              next[p.symbol] = { symbol: p.symbol, bid: p.bid, ask: p.ask, spread: p.spread, change24h: p.changePercent };
+              next[p.symbol] = { symbol: p.symbol, bid: p.bid, ask: p.ask, spread: p.spread, change24h: p.changePercent, digits: p.digits ?? 5 };
             }
           }
           return next;
         });
       })
       .catch(() => {});
+  }, []);
+
+  // Pending WS price updates — batched and flushed every animation frame for performance
+  const pendingPricesRef = useRef<Record<string, MarketDataPoint>>({});
+  const rafIdRef = useRef<number>(0);
+
+  // Flush batched WS prices into React state once per frame (16ms)
+  const flushPrices = useCallback(() => {
+    const pending = pendingPricesRef.current;
+    const keys = Object.keys(pending);
+    if (keys.length === 0) return;
+    pendingPricesRef.current = {};
+    setMarketData(prev => {
+      const next = { ...prev };
+      for (const k of keys) { const v = pending[k]; if (v) next[k] = v; }
+      return next;
+    });
+  }, []);
+
+  // Fetch volume + session high/low periodically (slow-changing data, not ticks)
+  useEffect(() => {
+    const fetchVolume = async () => {
+      try {
+        const res = await fetch("/api/market/volume");
+        if (!res.ok) return;
+        const data = await res.json() as Array<{ symbol: string; buyVolume: number; sellVolume: number; netVolume: number; topBuyer: { login: number; volume: number }; topSeller: { login: number; volume: number } }>;
+        const vols: Record<string, VolumeData> = {};
+        for (const v of data) {
+          vols[v.symbol] = { buy: v.buyVolume, sell: v.sellVolume, net: v.netVolume, topBuyer: v.topBuyer, topSeller: v.topSeller };
+        }
+        setVolumeBySymbol(vols);
+      } catch { /* ignore */ }
+    };
+    const fetchSessionHL = async () => {
+      try {
+        const res = await fetch("/api/market/prices");
+        if (!res.ok) return;
+        const prices = await res.json() as Array<{ symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number; sessionHighBid: number; sessionLowBid: number }>;
+        const hl: Record<string, { high: number; low: number }> = {};
+        for (const p of prices) {
+          if (p.sessionHighBid > 0) hl[p.symbol] = { high: p.sessionHighBid, low: p.sessionLowBid };
+        }
+        setSessionHighLow(hl);
+      } catch { /* ignore */ }
+    };
+    fetchVolume();
+    fetchSessionHL();
+    // Session high/low every 5s; volume every 5s (both change only on deals, not ticks)
+    const hlInterval = setInterval(fetchSessionHL, 5000);
+    const volumeInterval = setInterval(fetchVolume, 5000);
+    return () => { clearInterval(hlInterval); clearInterval(volumeInterval); };
   }, []);
 
   // WebSocket — zero delay live price stream (no polling, no throttle)
@@ -1096,14 +1100,15 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
 
       ws.onmessage = (ev) => {
         try {
-          const msg = JSON.parse(ev.data) as { type: string; data: { symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number } };
+          const msg = JSON.parse(ev.data) as { type: string; data: { symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number; digits: number } };
           if (msg.type === "prices" && msg.data) {
             const p = msg.data;
             if (p.bid > 0) {
-              setMarketData(prev => ({
-                ...prev,
-                [p.symbol]: { symbol: p.symbol, bid: p.bid, ask: p.ask, spread: p.spread, change24h: p.changePercent }
-              }));
+              // Batch into pending ref — flushed to React state once per animation frame
+              pendingPricesRef.current[p.symbol] = { symbol: p.symbol, bid: p.bid, ask: p.ask, spread: p.spread, change24h: p.changePercent, digits: p.digits ?? 5 };
+              if (!rafIdRef.current) {
+                rafIdRef.current = requestAnimationFrame(() => { rafIdRef.current = 0; flushPrices(); });
+              }
             }
           }
         } catch { /* ignore parse errors */ }
@@ -1123,8 +1128,9 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
       ws?.close();
       wsRef.current = null;
       setWsStatus("disconnected");
+      if (rafIdRef.current) { cancelAnimationFrame(rafIdRef.current); rafIdRef.current = 0; }
     };
-  }, []);
+  }, [flushPrices]);
 
   // Filtered search results for add symbol dropdown
   const searchResults = useMemo(() => {
@@ -1144,11 +1150,23 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
 
   const headers = [{ k: "symbol", l: "Symbol" }, { k: "bid", l: "Bid" }, { k: "ask", l: "Ask" }, { k: "spread", l: "Spread" }, { k: "buyVol", l: "Buy Vol" }, { k: "sellVol", l: "Sell Vol" }, { k: "netVol", l: "Net Vol" }, { k: "change", l: "24h %" }, { k: "", l: "" }];
 
-  type MktRow = { sym: string; bid: number; ask: number; spread: number; buyVol: number; sellVol: number; netVol: number; change: number };
+  // Format prices using the symbol's actual digits from MT5 (e.g. EURUSD=5, US30=0, XAUUSD=2)
+  // Falls back to magnitude heuristic if digits not yet available
+  const formatPrice = (val: number, digits?: number): string => {
+    if (val === 0) return "0";
+    if (digits !== undefined && digits >= 0) return val.toFixed(digits);
+    const abs = Math.abs(val);
+    if (abs >= 10000) return val.toFixed(0);
+    if (abs >= 100) return val.toFixed(2);
+    if (abs >= 10) return val.toFixed(3);
+    return val.toFixed(5);
+  };
+
+  type MktRow = { sym: string; bid: number; ask: number; spread: number; buyVol: number; sellVol: number; netVol: number; change: number; digits: number };
   let rows: MktRow[] = watchlist.map(sym => {
     const md = marketData[sym];
     const vol = volumeBySymbol[sym];
-    return { sym, bid: md?.bid ?? 0, ask: md?.ask ?? 0, spread: md?.spread ?? 0, buyVol: vol?.buy ?? 0, sellVol: vol?.sell ?? 0, netVol: vol?.net ?? 0, change: md?.change24h ?? 0 };
+    return { sym, bid: md?.bid ?? 0, ask: md?.ask ?? 0, spread: md?.spread ?? 0, buyVol: vol?.buy ?? 0, sellVol: vol?.sell ?? 0, netVol: vol?.net ?? 0, change: md?.change24h ?? 0, digits: md?.digits ?? 5 };
   });
   // Default sort: symbols with live prices first, then alphabetical
   if (!sortCol) {
@@ -1219,7 +1237,7 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
             ))}
           </tr></thead>
           <tbody>
-            {rows.map(({ sym, bid, ask, spread, buyVol, sellVol, netVol, change }) => {
+            {rows.map(({ sym, bid, ask, spread, buyVol, sellVol, netVol, change, digits }) => {
               const netColor = netVol > 0 ? C.green : netVol < 0 ? C.red : C.t3;
               const changeColor = change >= 0 ? C.green : C.red;
               const maxVol = Math.max(buyVol, sellVol, 1);
@@ -1230,9 +1248,9 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
                 <Fragment key={sym}>
                   <tr onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
                     <td style={{ padding: "10px 10px", borderBottom: bdr }}><span style={{ fontSize: 13, fontWeight: 600, color: bid > 0 ? C.t1 : C.t3, fontFamily: "'JetBrains Mono',monospace" }}>{sym}</span></td>
-                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: bid > 0 ? C.blue : C.t3, borderBottom: bdr, opacity: bid > 0 ? 1 : 0.4 }}>{bid > 0 ? bid : "No feed"}</td>
-                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: bid > 0 ? C.red : C.t3, borderBottom: bdr, opacity: bid > 0 ? 1 : 0.4 }}>{ask > 0 ? ask : "—"}</td>
-                    <td style={{ padding: "10px 10px", fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.t3, borderBottom: bdr }}>{spread ? spread.toFixed(bid > 100 ? 2 : 5) : "—"}</td>
+                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: bid > 0 ? C.blue : C.t3, borderBottom: bdr, opacity: bid > 0 ? 1 : 0.4 }}>{bid > 0 ? formatPrice(bid, digits) : "No feed"}</td>
+                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: bid > 0 ? C.red : C.t3, borderBottom: bdr, opacity: bid > 0 ? 1 : 0.4 }}>{ask > 0 ? formatPrice(ask, digits) : "—"}</td>
+                    <td style={{ padding: "10px 10px", fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.t3, borderBottom: bdr }}>{spread ? formatPrice(spread, digits) : "—"}</td>
                     <td style={{ padding: "10px 10px", borderBottom: bdr }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <div style={{ width: 50, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.06)" }}><div style={{ width: `${(buyVol / maxVol) * 100}%`, height: "100%", borderRadius: 2, background: C.blue, transition: "width 0.3s" }} /></div>
@@ -1255,8 +1273,8 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
                   {advanced && (
                     <tr style={{ background: "rgba(155,138,255,0.03)" }}>
                       <td style={{ padding: "2px 10px 8px", borderBottom: `1px solid ${C.border}`, fontSize: 9, color: C.t3, fontFamily: "'JetBrains Mono',monospace" }} />
-                      <td style={{ padding: "2px 10px 8px", borderBottom: `1px solid ${C.border}` }}><span style={{ fontSize: 9, color: C.t3, letterSpacing: "0.5px" }}>LOW </span><span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: C.amber }}>{adv.low}</span></td>
-                      <td style={{ padding: "2px 10px 8px", borderBottom: `1px solid ${C.border}` }}><span style={{ fontSize: 9, color: C.t3, letterSpacing: "0.5px" }}>HIGH </span><span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: C.teal }}>{adv.high}</span></td>
+                      <td style={{ padding: "2px 10px 8px", borderBottom: `1px solid ${C.border}` }}><span style={{ fontSize: 9, color: C.t3, letterSpacing: "0.5px" }}>LOW </span><span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: C.amber }}>{adv.low > 0 ? formatPrice(adv.low, digits) : "—"}</span></td>
+                      <td style={{ padding: "2px 10px 8px", borderBottom: `1px solid ${C.border}` }}><span style={{ fontSize: 9, color: C.t3, letterSpacing: "0.5px" }}>HIGH </span><span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: C.teal }}>{adv.high > 0 ? formatPrice(adv.high, digits) : "—"}</span></td>
                       <td style={{ padding: "2px 10px 8px", borderBottom: `1px solid ${C.border}` }} />
                       <td style={{ padding: "2px 10px 8px", borderBottom: `1px solid ${C.border}` }}><span style={{ fontSize: 9, color: C.t3 }}>TOP </span><span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: C.blue }}>{vol.topBuyer.login}</span><span style={{ fontSize: 9, color: C.t3 }}> ({vol.topBuyer.volume})</span></td>
                       <td style={{ padding: "2px 10px 8px", borderBottom: `1px solid ${C.border}` }}><span style={{ fontSize: 9, color: C.t3 }}>TOP </span><span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: C.red }}>{vol.topSeller.login}</span><span style={{ fontSize: 9, color: C.t3 }}> ({vol.topSeller.volume})</span></td>
@@ -1438,9 +1456,13 @@ function SettingsView({ connectionStatus }: { connectionStatus: ConnectionStatus
       const res = await fetch("/api/settings/connection", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ server, login, password, groupMask }),
+        body: JSON.stringify({ server, login, password: password || undefined, groupMask }),
       });
       if (res.ok) { setPassword(""); }
+      else {
+        const err = await res.json().catch(() => null) as { error?: string } | null;
+        if (err?.error) alert(err.error);
+      }
     } catch { /* ignore */ }
     finally { setConnecting(false); }
   }, [server, login, password, groupMask]);
@@ -1508,7 +1530,7 @@ function SettingsView({ connectionStatus }: { connectionStatus: ConnectionStatus
           <button onClick={handleConnect} disabled={connecting || !server || !login} style={{
             ...btnPrimary, opacity: connecting || !server || !login ? 0.5 : 1,
           }}>
-            {connecting ? "CONNECTING..." : "CONNECT"}
+            {connecting ? "CONNECTING..." : password ? "CONNECT" : "RECONNECT"}
           </button>
         )}
       </div>
@@ -1625,7 +1647,7 @@ export default function App() {
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [isLive, setIsLive] = useState(false);
   const [flashRows, setFlashRows] = useState<Set<number>>(new Set());
-  const [accounts, setAccounts] = useState<Account[]>(() => generateAccounts(20));
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const connectionStatus = useConnectionStatus();
 
   // Fetch real accounts from API (always poll — show real data when available)

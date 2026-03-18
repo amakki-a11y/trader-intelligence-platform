@@ -200,6 +200,26 @@ public sealed class PnLEngine
         return _pnlResults.Values.Where(r => r.Symbol == symbol).Sum(r => r.UnrealizedPnL);
     }
 
+    /// <summary>Gets open positions for a specific symbol. Thread-safe snapshot.</summary>
+    public IReadOnlyList<OpenPosition> GetPositionsBySymbol(string symbol)
+    {
+        lock (_positionLock)
+        {
+            if (_positionsBySymbol.TryGetValue(symbol, out var list))
+                return list.ToList();
+            return Array.Empty<OpenPosition>();
+        }
+    }
+
+    /// <summary>Gets all open positions across all symbols. Thread-safe snapshot.</summary>
+    public IReadOnlyList<OpenPosition> GetAllPositions()
+    {
+        lock (_positionLock)
+        {
+            return _positionsBySymbol.Values.SelectMany(l => l).ToList();
+        }
+    }
+
     /// <summary>Gets the number of tracked positions.</summary>
     public int TrackedPositionCount => _pnlResults.Count;
 

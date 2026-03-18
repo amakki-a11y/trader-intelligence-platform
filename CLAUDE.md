@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current state
-v2.0 in development — Phases 1-5 complete + real MT5 integration live. Live Market Watch with 1171 symbols, zero-delay WebSocket prices, full SelectedAddAll pump. Data persisting to TimescaleDB. Credentials secured via User Secrets. Phase 6 next.
+v2.0 in development — Phases 1-5 complete + Phase 6 hardening in progress. Live Market Watch with tick-only pricing (no TickLast/TickStat polling), SymbolCache with digits, 235 real accounts scored from 226K historical deals, 15 open positions loaded from MT5, reconnect-after-disconnect fixed. Data persisting to TimescaleDB. Credentials secured via User Secrets.
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to the v1.0 RebateAbuseDetector.
@@ -230,8 +230,25 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
   - Auto-reconnect WebSocket with 1s retry
   - Symbols with prices sorted to top by default
   - "No feed" shown for symbols without data
-- **Price seeding on startup**: Batch TickLast + individual TickLast/TickStat per symbol + 30s periodic refresh loop.
+- **Price seeding on startup**: ~~Batch TickLast + individual TickLast/TickStat per symbol + 30s periodic refresh loop~~ — REPLACED in Phase 6.1 with tick-only pricing.
 - **MT5 symbol names on this server**: use `-` suffix (XAUUSD-, EURUSD-, US30-) and also have `.m` and `.c` variants.
 - Tested: 1,171 symbols streaming, 25,000+ ticks/min ingested, zero-delay dashboard updates
+- `dotnet build` — zero warnings, zero errors
+- `npx tsc --noEmit` — zero errors
+
+### Phase 6.1: Price Pipeline Overhaul + Startup Warmup — ✅ DONE (2026-03-18)
+- **SymbolCache** (TIP.Api): singleton loaded once on startup from MT5 GetSymbols(). 3427 symbols with digits/description/contractSize. No per-request MT5 calls.
+- **Removed ALL TickLast/TickStat/batch seeding** from Program.cs. Prices come exclusively from live CIMTTickSink ticks. No 30s refresh loop. Eliminates stale prices and heavy MT5 API load.
+- **SymbolPriceDto** now includes `Digits` field for accurate frontend price formatting.
+- **MarketController rewritten**: removed tick-last and tick-batch endpoints. GetSymbols reads from SymbolCache. Prices endpoint includes digits per symbol.
+- **Frontend price formatting**: uses actual MT5 `digits` per symbol (EURUSD=5, US30=2, XAUUSD=2) instead of magnitude heuristic. No more floating-point artifacts.
+- **WebSocket batched RAF updates**: ticks accumulate in a ref and flush to React state once per animation frame (~60fps). Removed 200ms REST price polling. REST kept only for session high/low + volume (5s).
+- **Reconnect after disconnect fixed**: Connect endpoint accepts empty password, reuses stored credentials from User Secrets. ConnectionConfigRequest.Password made nullable. Button shows "RECONNECT" when password is empty.
+- **Account Scanner real data**: removed `generateAccounts()` dummy data generator. Initial state is empty array `[]`. Frontend shows only real scored accounts from API.
+- **ComputeEngineService DB warmup**: on startup, replays all historical deals from TimescaleDB through AccountScorer. 226,889 deals → 235 scored accounts available immediately.
+- **PnLEngine position loading**: on startup, fetches open positions from MT5 for all accounts via GetPositions(login). 15 positions across 3 symbols loaded. Market Watch Buy/Sell/Net Vol columns show real data.
+- **DealRepository.GetAllDealsAsync**: new method to fetch all deals ordered by time ASC for startup warmup.
+- **DB schema fix**: Added UNIQUE(entity_type, entity_id) constraint to sync_state table (was missing, caused ON CONFLICT errors). Transferred all 13 table ownerships from postgres → tip_user.
+- **Latency test page**: `web/public/latency-test.html` — standalone diagnostic for comparing WS vs REST price latency for US30- and XAUUSD-.
 - `dotnet build` — zero warnings, zero errors
 - `npx tsc --noEmit` — zero errors

@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TIP Latency Test — US30- / XAUUSD-</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0b0f; color: #e0e0e0; font-family: 'JetBrains Mono', 'Consolas', monospace; padding: 20px; }
+    h1 { font-size: 16px; color: #9b8aff; margin-bottom: 16px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+    .card { background: #12131a; border: 1px solid #1e2030; border-radius: 8px; padding: 16px; }
+    .card h2 { font-size: 13px; color: #7dd3fc; margin-bottom: 12px; letter-spacing: 1px; }
+    .price-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #1e2030; }
+    .price-row:last-child { border-bottom: none; }
+    .label { font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
+    .value { font-size: 18px; font-weight: 700; }
+    .bid { color: #60a5fa; }
+    .ask { color: #f87171; }
+    .spread { color: #9ca3af; font-size: 12px; }
+    .time { color: #a78bfa; font-size: 11px; }
+    .delay { font-size: 14px; font-weight: 700; }
+    .delay.good { color: #34d399; }
+    .delay.ok { color: #fbbf24; }
+    .delay.bad { color: #f87171; }
+    .ws-status { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+    .ws-status.connected { background: #065f46; color: #34d399; }
+    .ws-status.disconnected { background: #7f1d1d; color: #f87171; }
+    .ws-status.connecting { background: #78350f; color: #fbbf24; }
+    .log { background: #12131a; border: 1px solid #1e2030; border-radius: 8px; padding: 12px; max-height: 400px; overflow-y: auto; font-size: 10px; line-height: 1.6; }
+    .log-entry { border-bottom: 1px solid #1e203020; padding: 2px 0; }
+    .log-entry .sym { color: #9b8aff; font-weight: 600; }
+    .log-entry .ts { color: #6b7280; }
+    .stats { margin-top: 16px; display: flex; gap: 20px; }
+    .stat-box { background: #12131a; border: 1px solid #1e2030; border-radius: 8px; padding: 12px 16px; text-align: center; }
+    .stat-box .stat-val { font-size: 22px; font-weight: 700; color: #7dd3fc; }
+    .stat-box .stat-label { font-size: 9px; color: #6b7280; text-transform: uppercase; margin-top: 4px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .rest-section { margin-top: 16px; }
+    .compare-row { display: grid; grid-template-columns: 80px 1fr 1fr 100px; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid #1e2030; font-size: 11px; }
+    .compare-header { font-size: 9px; color: #6b7280; text-transform: uppercase; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>⚡ TIP Latency Test — US30- &amp; XAUUSD-</h1>
+    <div>
+      <span id="wsStatus" class="ws-status disconnected">WS: DISCONNECTED</span>
+      <span id="restStatus" class="ws-status disconnected" style="margin-left:8px">REST: POLLING</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- US30 Card -->
+    <div class="card">
+      <h2>US30- (Dow Jones)</h2>
+      <div class="price-row">
+        <div><span class="label">BID (WS)</span><br><span id="us30_ws_bid" class="value bid">—</span></div>
+        <div><span class="label">ASK (WS)</span><br><span id="us30_ws_ask" class="value ask">—</span></div>
+      </div>
+      <div class="price-row">
+        <div><span class="label">BID (REST)</span><br><span id="us30_rest_bid" class="value bid" style="opacity:0.6">—</span></div>
+        <div><span class="label">ASK (REST)</span><br><span id="us30_rest_ask" class="value ask" style="opacity:0.6">—</span></div>
+      </div>
+      <div class="price-row">
+        <div><span class="label">MT5 Tick Time</span><br><span id="us30_ticktime" class="time">—</span></div>
+        <div><span class="label">Browser Received</span><br><span id="us30_recvtime" class="time">—</span></div>
+      </div>
+      <div class="price-row">
+        <div><span class="label">WS Latency (MT5→Browser)</span><br><span id="us30_delay" class="delay good">—</span></div>
+        <div><span class="label">Ticks/sec</span><br><span id="us30_tps" class="delay good">—</span></div>
+      </div>
+    </div>
+
+    <!-- XAUUSD Card -->
+    <div class="card">
+      <h2>XAUUSD- (Gold)</h2>
+      <div class="price-row">
+        <div><span class="label">BID (WS)</span><br><span id="xau_ws_bid" class="value bid">—</span></div>
+        <div><span class="label">ASK (WS)</span><br><span id="xau_ws_ask" class="value ask">—</span></div>
+      </div>
+      <div class="price-row">
+        <div><span class="label">BID (REST)</span><br><span id="xau_rest_bid" class="value bid" style="opacity:0.6">—</span></div>
+        <div><span class="label">ASK (REST)</span><br><span id="xau_rest_ask" class="value ask" style="opacity:0.6">—</span></div>
+      </div>
+      <div class="price-row">
+        <div><span class="label">MT5 Tick Time</span><br><span id="xau_ticktime" class="time">—</span></div>
+        <div><span class="label">Browser Received</span><br><span id="xau_recvtime" class="time">—</span></div>
+      </div>
+      <div class="price-row">
+        <div><span class="label">WS Latency (MT5→Browser)</span><br><span id="xau_delay" class="delay good">—</span></div>
+        <div><span class="label">Ticks/sec</span><br><span id="xau_tps" class="delay good">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aggregate Stats -->
+  <div class="stats">
+    <div class="stat-box"><div id="totalWsTicks" class="stat-val">0</div><div class="stat-label">WS Ticks Received</div></div>
+    <div class="stat-box"><div id="avgLatency" class="stat-val">—</div><div class="stat-label">Avg WS Latency (ms)</div></div>
+    <div class="stat-box"><div id="minLatency" class="stat-val">—</div><div class="stat-label">Min Latency (ms)</div></div>
+    <div class="stat-box"><div id="maxLatency" class="stat-val">—</div><div class="stat-label">Max Latency (ms)</div></div>
+    <div class="stat-box"><div id="restPolls" class="stat-val">0</div><div class="stat-label">REST Polls</div></div>
+    <div class="stat-box"><div id="restAvgTime" class="stat-val">—</div><div class="stat-label">REST Round-Trip (ms)</div></div>
+    <div class="stat-box"><div id="clockOffset" class="stat-val">—</div><div class="stat-label">Clock Offset (MT5-Browser)</div></div>
+  </div>
+
+  <!-- Tick Log -->
+  <h1 style="margin-top:20px">📋 Live Tick Log (last 50)</h1>
+  <div id="tickLog" class="log"><div style="color:#6b7280">Waiting for ticks...</div></div>
+
+  <script>
+    const SYMBOLS = ['US30-', 'XAUUSD-'];
+    const state = {
+      ws: { 'US30-': { bid: 0, ask: 0, timeMsc: 0, recvMs: 0 }, 'XAUUSD-': { bid: 0, ask: 0, timeMsc: 0, recvMs: 0 } },
+      rest: { 'US30-': { bid: 0, ask: 0, timeMsc: 0 }, 'XAUUSD-': { bid: 0, ask: 0, timeMsc: 0 } },
+      latencies: [],
+      tickCounts: { 'US30-': [], 'XAUUSD-': [] },
+      totalWsTicks: 0,
+      restPolls: 0,
+      restTimes: [],
+    };
+
+    // ── Format helpers ──
+    const fmtPrice = (v, sym) => v > 0 ? v.toFixed(sym.includes('XAU') ? 2 : 0) : '—';
+    const fmtTime = (ms) => ms > 0 ? new Date(ms).toISOString().substring(11, 23) : '—';
+    const delayClass = (ms) => Math.abs(ms) < 100 ? 'good' : Math.abs(ms) < 500 ? 'ok' : 'bad';
+    // Clock offset between MT5 server and browser (calculated on first tick)
+    let clockOffset = null;
+
+    // ── Update UI ──
+    function updateUI(sym, source) {
+      const prefix = sym === 'US30-' ? 'us30' : 'xau';
+      if (source === 'ws') {
+        const d = state.ws[sym];
+        document.getElementById(`${prefix}_ws_bid`).textContent = fmtPrice(d.bid, sym);
+        document.getElementById(`${prefix}_ws_ask`).textContent = fmtPrice(d.ask, sym);
+        document.getElementById(`${prefix}_ticktime`).textContent = fmtTime(d.timeMsc);
+        document.getElementById(`${prefix}_recvtime`).textContent = fmtTime(d.recvMs);
+        const rawDiff = d.recvMs - d.timeMsc;
+        const latency = clockOffset !== null ? rawDiff - clockOffset : rawDiff;
+        const el = document.getElementById(`${prefix}_delay`);
+        el.textContent = latency + ' ms';
+        el.className = 'delay ' + delayClass(Math.abs(latency));
+      }
+      if (source === 'rest') {
+        const d = state.rest[sym];
+        document.getElementById(`${prefix}_rest_bid`).textContent = fmtPrice(d.bid, sym);
+        document.getElementById(`${prefix}_rest_ask`).textContent = fmtPrice(d.ask, sym);
+      }
+    }
+
+    // ── Ticks per second ──
+    setInterval(() => {
+      const now = Date.now();
+      for (const sym of SYMBOLS) {
+        state.tickCounts[sym] = state.tickCounts[sym].filter(t => now - t < 1000);
+        const prefix = sym === 'US30-' ? 'us30' : 'xau';
+        document.getElementById(`${prefix}_tps`).textContent = state.tickCounts[sym].length + '/s';
+      }
+    }, 200);
+
+    // ── Aggregate stats ──
+    setInterval(() => {
+      document.getElementById('totalWsTicks').textContent = state.totalWsTicks;
+      document.getElementById('restPolls').textContent = state.restPolls;
+      if (state.latencies.length > 0) {
+        const avg = state.latencies.reduce((a, b) => a + b, 0) / state.latencies.length;
+        const min = Math.min(...state.latencies);
+        const max = Math.max(...state.latencies);
+        document.getElementById('avgLatency').textContent = Math.round(avg) + ' ms';
+        document.getElementById('minLatency').textContent = min + ' ms';
+        document.getElementById('maxLatency').textContent = max + ' ms';
+      }
+      if (state.restTimes.length > 0) {
+        const avg = state.restTimes.reduce((a, b) => a + b, 0) / state.restTimes.length;
+        document.getElementById('restAvgTime').textContent = Math.round(avg) + ' ms';
+      }
+      if (clockOffset !== null) {
+        const secs = Math.round(clockOffset / 1000);
+        const h = Math.floor(Math.abs(secs) / 3600);
+        const m = Math.floor((Math.abs(secs) % 3600) / 60);
+        document.getElementById('clockOffset').textContent = (secs < 0 ? '-' : '+') + h + 'h ' + m + 'm';
+      }
+    }, 500);
+
+    // ── Tick log ──
+    const logEl = document.getElementById('tickLog');
+    let logEntries = [];
+    function addLog(sym, bid, ask, latency, source) {
+      const now = new Date().toISOString().substring(11, 23);
+      const entry = `<div class="log-entry"><span class="ts">${now}</span> <span class="sym">${sym}</span> bid=<span class="bid">${fmtPrice(bid, sym)}</span> ask=<span class="ask">${fmtPrice(ask, sym)}</span> <span style="color:${latency < 100 ? '#34d399' : latency < 500 ? '#fbbf24' : '#f87171'}">${latency}ms</span> [${source}]</div>`;
+      logEntries.unshift(entry);
+      if (logEntries.length > 50) logEntries = logEntries.slice(0, 50);
+      logEl.innerHTML = logEntries.join('');
+    }
+
+    // ── WebSocket Connection ──
+    function connectWS() {
+      const statusEl = document.getElementById('wsStatus');
+      statusEl.textContent = 'WS: CONNECTING';
+      statusEl.className = 'ws-status connecting';
+
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+      ws.onopen = () => {
+        statusEl.textContent = 'WS: CONNECTED';
+        statusEl.className = 'ws-status connected';
+        // Subscribe to prices only
+        ws.send(JSON.stringify({ subscribe: ['prices'] }));
+      };
+
+      ws.onmessage = (ev) => {
+        const recvMs = Date.now();
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type !== 'prices' || !msg.data) return;
+          const p = msg.data;
+          if (!SYMBOLS.includes(p.symbol)) return;
+
+          state.ws[p.symbol] = { bid: p.bid, ask: p.ask, timeMsc: p.timeMsc, recvMs };
+          state.totalWsTicks++;
+          state.tickCounts[p.symbol].push(recvMs);
+
+          // Calculate clock-adjusted latency
+          // First tick: estimate offset between MT5 server clock and browser clock
+          if (clockOffset === null) clockOffset = recvMs - p.timeMsc;
+          // Latency = (browser_now - mt5_tick_time) - clock_offset = how long after MT5 generated the tick we received it
+          const latency = (recvMs - p.timeMsc) - clockOffset;
+          state.latencies.push(latency);
+          if (state.latencies.length > 500) state.latencies = state.latencies.slice(-500);
+
+          updateUI(p.symbol, 'ws');
+          addLog(p.symbol, p.bid, p.ask, latency, 'WS');
+        } catch {}
+      };
+
+      ws.onclose = () => {
+        statusEl.textContent = 'WS: DISCONNECTED';
+        statusEl.className = 'ws-status disconnected';
+        setTimeout(connectWS, 1000);
+      };
+      ws.onerror = () => ws.close();
+    }
+
+    // ── REST Polling (for comparison) ──
+    async function pollREST() {
+      const start = Date.now();
+      try {
+        const symbols = SYMBOLS.join(',');
+        const res = await fetch(`/api/market/prices?symbols=${symbols}`);
+        if (!res.ok) return;
+        const prices = await res.json();
+        const roundTrip = Date.now() - start;
+        state.restPolls++;
+        state.restTimes.push(roundTrip);
+        if (state.restTimes.length > 100) state.restTimes = state.restTimes.slice(-100);
+
+        for (const p of prices) {
+          if (SYMBOLS.includes(p.symbol) && p.bid > 0) {
+            state.rest[p.symbol] = { bid: p.bid, ask: p.ask, timeMsc: p.timeMsc };
+            updateUI(p.symbol, 'rest');
+          }
+        }
+        document.getElementById('restStatus').textContent = `REST: ${roundTrip}ms`;
+        document.getElementById('restStatus').className = 'ws-status connected';
+      } catch {
+        document.getElementById('restStatus').textContent = 'REST: ERROR';
+        document.getElementById('restStatus').className = 'ws-status disconnected';
+      }
+    }
+
+    // ── Start ──
+    connectWS();
+    pollREST();
+    setInterval(pollREST, 200);
+  </script>
+</body>
+</html>

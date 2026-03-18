@@ -8,7 +8,7 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:5000',
       '/ws': {
-        target: 'ws://localhost:5000',
+        target: 'http://localhost:5000',
         ws: true,
       },
       '/health': 'http://localhost:5000',
