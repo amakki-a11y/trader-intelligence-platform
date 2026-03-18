@@ -117,10 +117,21 @@ public sealed class MT5ApiReal : IMT5Api
     /// <inheritdoc />
     public bool SubscribeDeals()
     {
-        if (_manager == null) return false;
+        if (_manager == null) { LastError = "Manager is null"; return false; }
 
         _dealSink = new DealSinkHandler(this);
+
+        // RegisterSink() must be called to wire up native callbacks before subscribing
+        var regRes = _dealSink.RegisterSink();
+        if (regRes != MTRetCode.MT_RET_OK)
+        {
+            LastError = $"DealSink.RegisterSink failed: {regRes}";
+            return false;
+        }
+
         var res = _manager.DealSubscribe(_dealSink);
+        if (res != MTRetCode.MT_RET_OK)
+            LastError = $"DealSubscribe failed: {res}";
         return res == MTRetCode.MT_RET_OK;
     }
 
@@ -137,10 +148,21 @@ public sealed class MT5ApiReal : IMT5Api
     /// <inheritdoc />
     public bool SubscribeTicks(string symbolMask = "*")
     {
-        if (_manager == null) return false;
+        if (_manager == null) { LastError = "Manager is null"; return false; }
 
         _tickSink = new TickSinkHandler(this);
+
+        // RegisterSink() must be called to wire up native callbacks before subscribing
+        var regRes = _tickSink.RegisterSink();
+        if (regRes != MTRetCode.MT_RET_OK)
+        {
+            LastError = $"TickSink.RegisterSink failed: {regRes}";
+            return false;
+        }
+
         var res = _manager.TickSubscribe(_tickSink);
+        if (res != MTRetCode.MT_RET_OK)
+            LastError = $"TickSubscribe failed: {res}";
         return res == MTRetCode.MT_RET_OK;
     }
 
@@ -303,6 +325,120 @@ public sealed class MT5ApiReal : IMT5Api
     }
 
     /// <inheritdoc />
+    public RawTick? GetTickLast(string symbol)
+    {
+        if (_manager == null) return null;
+
+        try
+        {
+            // TickLast(string symbol, out MTTickShort tick) → MTRetCode
+            var res = _manager.TickLast(symbol, out MTTickShort tick);
+            if (res != MTRetCode.MT_RET_OK) return null;
+            if (tick.bid <= 0 && tick.ask <= 0) return null;
+
+            return new RawTick
+            {
+                Symbol = symbol,
+                Bid = tick.bid,
+                Ask = tick.ask,
+                TimeMsc = tick.datetime_msc
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <inheritdoc />
+    public RawTickStat? GetTickStat(string symbol)
+    {
+        if (_manager == null) return null;
+
+        try
+        {
+            // MTTickStat has session-level data: bid_high, bid_low, ask_high, ask_low,
+            // price_open, price_close — but NO current bid/ask fields.
+            // We use price_close as best approximation for current price.
+            var res = _manager.TickStat(symbol, out MTTickStat stat);
+            if (res != MTRetCode.MT_RET_OK) return null;
+
+            // Use bid_high as indicator of any session data existing
+            if (stat.bid_high <= 0 && stat.ask_high <= 0 && stat.price_close <= 0) return null;
+
+            // Best available "current" price: price_close, or midpoint of high/low
+            var bid = stat.price_close > 0 ? stat.price_close : stat.bid_high;
+            var ask = stat.ask_high > 0 ? stat.ask_high : bid;
+
+            return new RawTickStat
+            {
+                Symbol = symbol,
+                Bid = bid,
+                Ask = ask,
+                Last = stat.price_close,
+                High = stat.bid_high,
+                Low = stat.bid_low,
+                TimeMsc = stat.datetime_msc
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <inheritdoc />
+    public List<RawTick> GetTickLastBatch()
+    {
+        var result = new List<RawTick>();
+        if (_manager == null) return result;
+
+        try
+        {
+            // Batch TickLast: returns array of MTTick for all symbols with recent activity.
+            // The 'id' parameter is a rolling cursor — pass 0 to start fresh.
+            uint id = 0;
+            var ticks = _manager.TickLast(ref id, out var res);
+            if (res != MTRetCode.MT_RET_OK || ticks == null) return result;
+
+            foreach (var tick in ticks)
+            {
+                if (tick.bid > 0 || tick.ask > 0)
+                {
+                    result.Add(new RawTick
+                    {
+                        Symbol = tick.symbol,
+                        Bid = tick.bid,
+                        Ask = tick.ask,
+                        TimeMsc = tick.datetime_msc
+                    });
+                }
+            }
+        }
+        catch
+        {
+            // Batch API may not be supported on all server versions
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc />
+    public bool SelectedAddAll()
+    {
+        if (_manager == null) { LastError = "Manager is null"; return false; }
+
+        var res = _manager.SelectedAddAll();
+        if (res != MTRetCode.MT_RET_OK)
+        {
+            LastError = $"SelectedAddAll failed: {res}";
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
     public void Dispose()
     {
         if (_disposed) return;
@@ -371,6 +507,11 @@ public sealed class MT5ApiReal : IMT5Api
 
     /// <summary>
     /// Internal CIMTTickSink handler that copies native tick data and fires OnTick events.
+    ///
+    /// Design rationale:
+    /// - CIMTTickSink has two virtual OnTick overloads: (string, MTTickShort) and (int, MTTick).
+    /// - Different MT5 server versions may call one or the other. We override both to be safe.
+    /// - The (int feeder, MTTick tick) overload receives the full MTTick with symbol inside it.
     /// </summary>
     private sealed class TickSinkHandler : CIMTTickSink
     {
@@ -378,6 +519,7 @@ public sealed class MT5ApiReal : IMT5Api
 
         public TickSinkHandler(MT5ApiReal owner) => _owner = owner;
 
+        /// <summary>Overload called by some MT5 builds — receives symbol + short tick struct.</summary>
         public override void OnTick(string symbol, MTTickShort tick)
         {
             _owner.FireTick(new RawTick
@@ -387,6 +529,21 @@ public sealed class MT5ApiReal : IMT5Api
                 Ask = tick.ask,
                 TimeMsc = tick.datetime_msc
             });
+        }
+
+        /// <summary>Overload called by some MT5 builds — receives feeder ID + full tick struct.</summary>
+        public override void OnTick(int feeder, MTTick tick)
+        {
+            if (tick.bid > 0 || tick.ask > 0)
+            {
+                _owner.FireTick(new RawTick
+                {
+                    Symbol = tick.symbol,
+                    Bid = tick.bid,
+                    Ask = tick.ask,
+                    TimeMsc = tick.datetime_msc
+                });
+            }
         }
     }
 }

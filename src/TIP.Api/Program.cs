@@ -228,6 +228,7 @@ try
     builder.Services.AddSingleton<ExposureEngine>();
     builder.Services.AddSingleton<AccountScorer>();
     builder.Services.AddSingleton<BotFingerprinter>();
+    builder.Services.AddSingleton<PriceCache>();
     builder.Services.AddSingleton<DealerHub>();
     builder.Services.AddSingleton<IWebSocketBroadcaster>(sp => sp.GetRequiredService<DealerHub>());
 
@@ -239,7 +240,8 @@ try
         sp.GetRequiredService<PnLEngine>(),
         sp.GetRequiredService<PipelineOrchestrator>(),
         sp.GetRequiredService<ExposureEngine>(),
-        sp.GetRequiredService<IWebSocketBroadcaster>()));
+        sp.GetRequiredService<IWebSocketBroadcaster>(),
+        sp.GetRequiredService<PriceCache>()));
 
     builder.Services.AddHostedService(sp => new ComputeEngineService(
         sp.GetRequiredService<ILogger<ComputeEngineService>>(),
@@ -331,6 +333,112 @@ try
 
         var ws = await context.WebSockets.AcceptWebSocketAsync();
         await hub.HandleConnection(ws, context.RequestAborted);
+    });
+
+    // ── Seed Price Cache from MT5 ──────────────────────────────────────────
+    // After pipeline connects, seed the price cache with last known symbol prices
+    _ = Task.Run(async () =>
+    {
+        var priceCache = app.Services.GetRequiredService<PriceCache>();
+        var mt5Api = app.Services.GetRequiredService<IMT5Api>();
+        var orchestrator = app.Services.GetRequiredService<PipelineOrchestrator>();
+        var logger = app.Services.GetRequiredService<ILogger<PriceCache>>();
+
+        // Wait for pipeline to reach at least Buffering (MT5 connected)
+        while (orchestrator.State < PipelineOrchestratorState.Buffering)
+        {
+            await Task.Delay(1000);
+        }
+
+        try
+        {
+            // Phase 1: Try batch TickLast — gets all symbols with pump data in one call
+            var batchTicks = mt5Api.GetTickLastBatch();
+            var seeded = 0;
+            foreach (var tick in batchTicks)
+            {
+                if (tick.Bid > 0)
+                {
+                    priceCache.Seed(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
+                    seeded++;
+                }
+            }
+
+            logger.LogInformation("PriceCache: Batch TickLast seeded {Count} symbols", seeded);
+
+            // Phase 2: For remaining symbols, try TickStat (has data even without recent ticks)
+            var allSymbols = mt5Api.GetSymbols();
+            var statSeeded = 0;
+            foreach (var rawSym in allSymbols)
+            {
+                // Skip if already seeded from batch
+                if (priceCache.Get(rawSym.Symbol) != null) continue;
+
+                try
+                {
+                    // Try TickLast first
+                    var tick = mt5Api.GetTickLast(rawSym.Symbol);
+                    if (tick != null && tick.Bid > 0)
+                    {
+                        priceCache.Seed(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
+                        statSeeded++;
+                        continue;
+                    }
+
+                    // Fall back to TickStat
+                    var stat = mt5Api.GetTickStat(rawSym.Symbol);
+                    if (stat != null && stat.Bid > 0)
+                    {
+                        priceCache.Seed(stat.Symbol, stat.Bid, stat.Ask, stat.TimeMsc);
+                        statSeeded++;
+                    }
+                }
+                catch
+                {
+                    // Skip symbols without any price data
+                }
+            }
+
+            logger.LogInformation(
+                "PriceCache: Seeded {Total} symbols total ({Batch} from batch, {Stat} from individual TickLast/TickStat)",
+                seeded + statSeeded, seeded, statSeeded);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "PriceCache: Failed to seed from MT5 symbols");
+        }
+
+        // Phase 3: Periodic refresh — poll every 30s for symbols that don't have live tick data
+        while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(30000, app.Lifetime.ApplicationStopping);
+
+                var batchRefresh = mt5Api.GetTickLastBatch();
+                var refreshed = 0;
+                foreach (var tick in batchRefresh)
+                {
+                    if (tick.Bid > 0)
+                    {
+                        priceCache.Update(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
+                        refreshed++;
+                    }
+                }
+
+                if (refreshed > priceCache.Count)
+                    logger.LogInformation("PriceCache: Batch refresh updated {Count} symbols (cache has {CacheCount})",
+                        refreshed, priceCache.Count);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "PriceCache: Refresh cycle failed");
+            }
+        }
     });
 
     app.Run();

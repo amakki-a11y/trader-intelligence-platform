@@ -254,8 +254,16 @@ public sealed class MT5Connection : BackgroundService
     /// <summary>
     /// Converts a RawTick to TickEvent and passes to TickListener.
     /// </summary>
+    private long _tickCount;
     private void OnTickReceived(RawTick raw)
     {
+        var count = System.Threading.Interlocked.Increment(ref _tickCount);
+        if (count <= 5 || count % 10000 == 0)
+        {
+            _logger.LogInformation("Tick received #{Count}: {Symbol} bid={Bid} ask={Ask}",
+                count, raw.Symbol, raw.Bid, raw.Ask);
+        }
+
         var tickEvent = new TickEvent(
             Symbol: raw.Symbol,
             Bid: raw.Bid,

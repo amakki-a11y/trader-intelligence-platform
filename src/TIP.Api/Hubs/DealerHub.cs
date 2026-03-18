@@ -17,7 +17,7 @@ namespace TIP.Api.Hubs;
 /// - Clients send a subscribe message on connect: { "subscribe": ["prices","accounts",...] }
 /// - Only subscribed message types are pushed to each client (saves bandwidth).
 /// - Tracks clients via ConcurrentDictionary for thread-safe add/remove.
-/// - Throttles prices to max 1 per symbol per 500ms, positions to max 1 per second.
+/// - Prices are forwarded instantly with zero throttle for real-time accuracy.
 /// - Scores and alerts are sent immediately (low frequency, high importance).
 /// - All outbound messages follow: { "type": "prices"|"accounts"|"positions"|"alerts", "data": ... }
 /// </summary>
@@ -25,7 +25,7 @@ public sealed class DealerHub : IWebSocketBroadcaster
 {
     private readonly ILogger<DealerHub> _logger;
     private readonly ConcurrentDictionary<string, ClientState> _clients = new();
-    private readonly ConcurrentDictionary<string, long> _lastPriceSent = new();
+    // Price throttle removed — ticks forwarded instantly for real-time accuracy
     private long _lastPositionBroadcast;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -140,11 +140,6 @@ public sealed class DealerHub : IWebSocketBroadcaster
     /// <inheritdoc/>
     public async Task BroadcastPriceUpdate(SymbolPriceDto price)
     {
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        if (_lastPriceSent.TryGetValue(price.Symbol, out var lastSent) && now - lastSent < 500)
-            return;
-
-        _lastPriceSent[price.Symbol] = now;
         await Broadcast("prices", price).ConfigureAwait(false);
     }
 

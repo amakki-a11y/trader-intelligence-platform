@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using TIP.Connector;
 using TIP.Core.Models;
 
@@ -140,6 +141,25 @@ public sealed class DealWriterService : BackgroundService
         try
         {
             await _dealRepository.BulkInsertAsync(batch, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Npgsql.PostgresException pgEx) when (pgEx.SqlState == "23505")
+        {
+            // Duplicate key — deals already exist. Fall back to individual upserts (ON CONFLICT DO NOTHING)
+            _logger.LogWarning("Deal bulk insert hit duplicates — falling back to individual upsert for {Count} deals", batch.Count);
+            var inserted = 0;
+            foreach (var deal in batch)
+            {
+                try
+                {
+                    await _dealRepository.InsertAsync(deal, cancellationToken).ConfigureAwait(false);
+                    inserted++;
+                }
+                catch (Exception innerEx) when (innerEx is not OperationCanceledException)
+                {
+                    // Individual insert also failed — skip this deal
+                }
+            }
+            _logger.LogInformation("Individual upsert complete — {Inserted}/{Total} deals inserted", inserted, batch.Count);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

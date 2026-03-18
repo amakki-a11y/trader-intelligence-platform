@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current state
-v2.0 in development — Phases 1-5 complete + real MT5 integration tested. Data persisting to TimescaleDB. Credentials secured via User Secrets. Phase 6 next.
+v2.0 in development — Phases 1-5 complete + real MT5 integration live. Live Market Watch with 1171 symbols, zero-delay WebSocket prices, full SelectedAddAll pump. Data persisting to TimescaleDB. Credentials secured via User Secrets. Phase 6 next.
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to the v1.0 RebateAbuseDetector.
@@ -210,3 +210,28 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 - Verified: deals=40, accounts=2, trader_profiles=2, score_history=2, ticks=0 (market closed)
 - `dotnet build` — zero warnings, zero errors
 - 143 tests passing
+
+### Phase 6 Prep: Live Market Watch + Zero-Delay Price Pipeline — ✅ DONE (2026-03-18)
+- **PriceCache** (TIP.Api): thread-safe ConcurrentDictionary singleton. Stores CachedPrice (bid, ask, spread, change, changePercent, previousBid, sessionOpenBid). Updated on every tick by PnLEngineService. Read by REST endpoints and WebSocket broadcast.
+- **MarketController** (TIP.Api): REST endpoints — GET /api/market/prices (filtered or all), /api/market/status, /api/market/symbols (search all MT5 symbols), /api/market/tick-last (TickLast + TickStat fallback, seeds PriceCache), /api/market/tick-batch (batch pump ticks).
+- **SelectedAddAll** — ROOT CAUSE FIX: MT5 Manager API pump only streams ticks for "Selected" symbols. Added `SelectedAddAll()` call in PipelineOrchestrator after Connect() and before TickSubscribe(). This tells the pump to stream ALL symbols. Went from 3 symbols to **1,171 symbols** with live prices.
+- **RegisterSink** — CRITICAL FIX: `CIMTDealSink.RegisterSink()` and `CIMTTickSink.RegisterSink()` MUST be called before `DealSubscribe`/`TickSubscribe`. Without this, subscriptions return `MT_RET_ERR_PARAMS` and no ticks/deals flow.
+- **IMT5Api expanded**: Added `GetTickLast(symbol)`, `GetTickStat(symbol)` (MTTickStat — session stats), `GetTickLastBatch()` (batch pump ticks), `SelectedAddAll()`. All implemented in MT5ApiReal and MT5ApiSimulator.
+- **RawTickStat type**: session-level stats from MTTickStat (bid_high, bid_low, ask_high, ask_low, price_open, price_close, datetime_msc).
+- **TickSinkHandler dual overloads**: Both `OnTick(string symbol, MTTickShort tick)` and `OnTick(int feeder, MTTick tick)` overridden in MT5ApiReal for compatibility with different MT5 server versions.
+- **DealWriterService duplicate fix**: Catches PostgresException SqlState 23505 on COPY bulk insert, falls back to individual INSERT ON CONFLICT DO NOTHING.
+- **PipelineOrchestrator hardened**: 3s PUMP wait after Connect(), SelectedAddAll() before subscribing, 3-attempt retry loop for deal/tick subscriptions with 2s delay, detailed logging.
+- **Zero-delay WebSocket prices**: Removed 500ms per-symbol throttle from DealerHub. Every tick from MT5 is pushed instantly to all subscribed browsers.
+- **Frontend Market Watch rebuilt**:
+  - Default watchlist of 12 key symbols (not all 1171)
+  - Add Symbol: search dropdown searches all MT5 symbols by name or description
+  - Remove Symbol: × button on each row
+  - One-time REST snapshot on load, then pure WebSocket for all live updates (no polling)
+  - Auto-reconnect WebSocket with 1s retry
+  - Symbols with prices sorted to top by default
+  - "No feed" shown for symbols without data
+- **Price seeding on startup**: Batch TickLast + individual TickLast/TickStat per symbol + 30s periodic refresh loop.
+- **MT5 symbol names on this server**: use `-` suffix (XAUUSD-, EURUSD-, US30-) and also have `.m` and `.c` variants.
+- Tested: 1,171 symbols streaming, 25,000+ ticks/min ingested, zero-delay dashboard updates
+- `dotnet build` — zero warnings, zero errors
+- `npx tsc --noEmit` — zero errors

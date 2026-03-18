@@ -192,6 +192,62 @@ public sealed class MT5ApiSimulator : IMT5Api
     }
 
     /// <inheritdoc />
+    public RawTick? GetTickLast(string symbol)
+    {
+        var sym = Array.Find(Symbols, s => s.Name == symbol);
+        if (sym == null) return null;
+
+        var spread = sym.Step * (2 + 1.5);
+        return new RawTick
+        {
+            Symbol = sym.Name,
+            Bid = Math.Round(sym.CurrentBid, sym.Digits),
+            Ask = Math.Round(sym.CurrentBid + spread, sym.Digits),
+            TimeMsc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        };
+    }
+
+    /// <inheritdoc />
+    public RawTickStat? GetTickStat(string symbol)
+    {
+        var sym = Array.Find(Symbols, s => s.Name == symbol);
+        if (sym == null) return null;
+
+        var spread = sym.Step * (2 + 1.5);
+        return new RawTickStat
+        {
+            Symbol = sym.Name,
+            Bid = Math.Round(sym.CurrentBid, sym.Digits),
+            Ask = Math.Round(sym.CurrentBid + spread, sym.Digits),
+            Last = 0,
+            High = Math.Round(sym.CurrentBid * 1.005, sym.Digits),
+            Low = Math.Round(sym.CurrentBid * 0.995, sym.Digits),
+            TimeMsc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        };
+    }
+
+    /// <inheritdoc />
+    public List<RawTick> GetTickLastBatch()
+    {
+        var result = new List<RawTick>();
+        foreach (var sym in Symbols)
+        {
+            var spread = sym.Step * (2 + 1.5);
+            result.Add(new RawTick
+            {
+                Symbol = sym.Name,
+                Bid = Math.Round(sym.CurrentBid, sym.Digits),
+                Ask = Math.Round(sym.CurrentBid + spread, sym.Digits),
+                TimeMsc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            });
+        }
+        return result;
+    }
+
+    /// <inheritdoc />
+    public bool SelectedAddAll() => true;
+
+    /// <inheritdoc />
     public void Dispose()
     {
         if (_disposed) return;

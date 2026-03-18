@@ -29,6 +29,7 @@ public sealed class PnLEngineService : BackgroundService
     private readonly PipelineOrchestrator _orchestrator;
     private readonly ExposureEngine _exposureEngine;
     private readonly IWebSocketBroadcaster _broadcaster;
+    private readonly PriceCache _priceCache;
     private readonly ConcurrentDictionary<string, double> _firstBid = new();
     private long _ticksProcessed;
 
@@ -41,7 +42,8 @@ public sealed class PnLEngineService : BackgroundService
         PnLEngine pnlEngine,
         PipelineOrchestrator orchestrator,
         ExposureEngine exposureEngine,
-        IWebSocketBroadcaster broadcaster)
+        IWebSocketBroadcaster broadcaster,
+        PriceCache priceCache)
     {
         _logger = logger;
         _tickReader = tickReader;
@@ -49,6 +51,7 @@ public sealed class PnLEngineService : BackgroundService
         _orchestrator = orchestrator;
         _exposureEngine = exposureEngine;
         _broadcaster = broadcaster;
+        _priceCache = priceCache;
     }
 
     /// <summary>
@@ -75,6 +78,9 @@ public sealed class PnLEngineService : BackgroundService
             {
                 _pnlEngine.OnTick(tick.Symbol, tick.Bid, tick.Ask);
                 Interlocked.Increment(ref _ticksProcessed);
+
+                // Update the shared price cache for REST API consumers
+                _priceCache.Update(tick.Symbol, tick.Bid, tick.Ask, tick.TimeMsc);
 
                 // Track first bid for change calculation
                 _firstBid.TryAdd(tick.Symbol, tick.Bid);

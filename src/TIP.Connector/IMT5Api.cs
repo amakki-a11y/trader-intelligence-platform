@@ -122,4 +122,32 @@ public interface IMT5Api : IDisposable
     /// Gets all available trading symbols from the MT5 server.
     /// </summary>
     List<RawSymbol> GetSymbols();
+
+    /// <summary>
+    /// Gets the last known tick (bid/ask) for a specific symbol.
+    /// Returns null if the symbol is not found or the API is not connected.
+    /// </summary>
+    /// <param name="symbol">Symbol name (e.g., "EURUSD").</param>
+    RawTick? GetTickLast(string symbol);
+
+    /// <summary>
+    /// Gets tick statistics for a symbol including bid, ask, high, low, volume.
+    /// Uses MT5 TickStat API which returns data even for symbols without recent live ticks.
+    /// Returns null if the symbol is not found or the API is not connected.
+    /// </summary>
+    /// <param name="symbol">Symbol name (e.g., "EURUSD").</param>
+    RawTickStat? GetTickStat(string symbol);
+
+    /// <summary>
+    /// Gets the last known ticks for all symbols currently streaming via the pump.
+    /// Uses the batch TickLast API with a rolling ID to retrieve all available ticks at once.
+    /// </summary>
+    List<RawTick> GetTickLastBatch();
+
+    /// <summary>
+    /// Adds ALL symbols to the MT5 Manager's "Selected" list so the pump streams
+    /// tick data for every instrument. Must be called after Connect() and before TickSubscribe().
+    /// Without this, the pump only streams ticks for a small default set of symbols.
+    /// </summary>
+    bool SelectedAddAll();
 }

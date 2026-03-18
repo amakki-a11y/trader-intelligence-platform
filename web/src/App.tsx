@@ -31,17 +31,7 @@ interface VolumeData { buy: number; sell: number; net: number; topBuyer: { login
 
 // ─── Dummy Data ────────────────────────────────────────────────
 const SYMBOLS = ["XAUUSD","EURUSD","GBPUSD","USDJPY","BTCUSD","AUDUSD","USDCHF","NZDUSD","EURJPY","GBPJPY"];
-const DEFAULT_WATCHLIST = ["XAUUSD","EURUSD","GBPUSD","USDJPY","NZDUSD","AUDUSD","USDCAD","GBPJPY","EURJPY","EURGBP"];
-const BASE_PRICES: Record<string, number> = {
-  XAUUSD: 2348.50, EURUSD: 1.0842, GBPUSD: 1.2715, USDJPY: 154.32, NZDUSD: 0.5987,
-  AUDUSD: 0.6543, USDCAD: 1.3621, GBPJPY: 196.18, EURJPY: 167.35, EURGBP: 0.8527,
-  BTCUSD: 67250, USDCHF: 0.8834,
-};
-const SPREAD_PIPS: Record<string, number> = {
-  XAUUSD: 0.30, EURUSD: 0.00012, GBPUSD: 0.00015, USDJPY: 0.015, NZDUSD: 0.00018,
-  AUDUSD: 0.00014, USDCAD: 0.00016, GBPJPY: 0.025, EURJPY: 0.018, EURGBP: 0.00013,
-  BTCUSD: 15, USDCHF: 0.00014,
-};
+const DEFAULT_WATCHLIST = ["US30-","XAUUSD-","EURUSD-","GBPUSD-","USDJPY-","NZDUSD-","AUDUSD-","USDCAD-","GBPJPY-","EURJPY-","EURGBP-","BTCUSD-"];
 const IBS = ["IB-2201","IB-2202","IB-3301","IB-4401","IB-5501","IB-6601"];
 const EAS = [0, 77201, 77201, 88302, 99100, 0, 77201, 0, 88302, 0, 55010, 77201, 0, 88302, 0, 77201, 0, 99100];
 const GROUPS = ["forex\\retail\\standard","forex\\retail\\vip","forex\\retail\\micro","forex\\ib\\premium"];
@@ -53,17 +43,6 @@ const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]!;
 const severity = (s: number) => s >= 70 ? "CRITICAL" : s >= 50 ? "HIGH" : s >= 30 ? "MEDIUM" : "LOW";
 const sevColor = (s: number) => s >= 70 ? "#FF5252" : s >= 50 ? "#FF7B6B" : s >= 30 ? "#FFBA42" : "#3DD9A0";
 
-function generateMarketData(symbol: string): MarketDataPoint {
-  const base = BASE_PRICES[symbol] ?? 1.0;
-  const spread = SPREAD_PIPS[symbol] ?? 0.0002;
-  const jitter = base * (Math.random() - 0.5) * 0.002;
-  const jpySym = ["USDJPY","GBPJPY","EURJPY"].includes(symbol);
-  const dec = symbol === "BTCUSD" ? 0 : (symbol === "XAUUSD" ? 2 : (jpySym ? 3 : 5));
-  const bid = +(base + jitter).toFixed(dec);
-  const ask = +(bid + spread).toFixed(dec);
-  const change24h = randFloat(-1.5, 1.5);
-  return { symbol, bid, ask, spread: +(ask - bid).toFixed(symbol === "BTCUSD" ? 0 : 5), change24h };
-}
 
 function generateAccounts(n = 20): Account[] {
   const accounts: Account[] = [];
@@ -1037,22 +1016,25 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
 }
 
 // ─── Market Watch ──────────────────────────────────────────────
-function MarketWatch({ isLive }: { isLive: boolean }) {
-  const [watchlist, setWatchlist] = useState(DEFAULT_WATCHLIST);
+function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
+  const [watchlist, setWatchlist] = useState<string[]>(DEFAULT_WATCHLIST);
+  const [allSymbols, setAllSymbols] = useState<Array<{ symbol: string; description: string }>>([]);
   const [marketData, setMarketData] = useState<Record<string, MarketDataPoint>>({});
   const [addInput, setAddInput] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState(-1);
   const [advanced, setAdvanced] = useState(false);
+  const [wsStatus, setWsStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
+  const wsRef = useRef<WebSocket | null>(null);
+  const marketDataRef = useRef(marketData);
+  marketDataRef.current = marketData;
   const toggleSort = (col: string) => { if (sortCol === col) setSortDir(d => d * -1); else { setSortCol(col); setSortDir(-1); } };
 
   const volumeBySymbol = useMemo(() => {
     const vols: Record<string, VolumeData> = {};
     watchlist.forEach(sym => {
-      const buyVol = randFloat(5, 200, 1);
-      const sellVol = randFloat(5, 200, 1);
-      vols[sym] = { buy: buyVol, sell: sellVol, net: +(buyVol - sellVol).toFixed(1), topBuyer: { login: 50001 + randBetween(0, 19), volume: randFloat(1, buyVol * 0.6, 1) }, topSeller: { login: 50001 + randBetween(0, 19), volume: randFloat(1, sellVol * 0.6, 1) } };
+      vols[sym] = { buy: 0, sell: 0, net: 0, topBuyer: { login: 0, volume: 0 }, topSeller: { login: 0, volume: 0 } };
     });
     return vols;
   }, [watchlist]);
@@ -1060,27 +1042,101 @@ function MarketWatch({ isLive }: { isLive: boolean }) {
   const advancedData = useMemo(() => {
     const data: Record<string, { low: number; high: number }> = {};
     watchlist.forEach(sym => {
-      const base = BASE_PRICES[sym] ?? 1.0;
-      const jpySym = ["USDJPY","GBPJPY","EURJPY"].includes(sym);
-      const decimals = sym === "BTCUSD" ? 0 : (sym === "XAUUSD" ? 2 : (jpySym ? 3 : 5));
-      data[sym] = { low: +(base * (1 - randFloat(0.002, 0.012))).toFixed(decimals), high: +(base * (1 + randFloat(0.002, 0.012))).toFixed(decimals) };
+      const md = marketData[sym];
+      if (md && md.bid > 0) {
+        data[sym] = { low: md.bid, high: md.ask };
+      } else {
+        data[sym] = { low: 0, high: 0 };
+      }
     });
     return data;
-  }, [watchlist]);
+  }, [watchlist, marketData]);
 
+  // Load available symbols from MT5 (for the add symbol search)
   useEffect(() => {
-    const update = () => {
-      const data: Record<string, MarketDataPoint> = {};
-      watchlist.forEach(sym => { data[sym] = generateMarketData(sym); });
-      setMarketData(data);
-    };
-    update();
-    const interval = setInterval(update, isLive ? 2000 : 5000);
-    return () => clearInterval(interval);
-  }, [watchlist, isLive]);
+    fetch("/api/market/symbols")
+      .then(r => r.ok ? r.json() : [])
+      .then((syms: Array<{ symbol: string; description: string }>) => setAllSymbols(syms))
+      .catch(() => {});
+  }, []);
 
-  const handleAdd = () => {
-    const sym = addInput.toUpperCase().trim();
+  // One-time initial snapshot from REST (fills cache before WS connects)
+  useEffect(() => {
+    fetch("/api/market/prices")
+      .then(r => r.ok ? r.json() : [])
+      .then((prices: Array<{ symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number }>) => {
+        setMarketData(prev => {
+          const next = { ...prev };
+          for (const p of prices) {
+            if (p.bid > 0) {
+              next[p.symbol] = { symbol: p.symbol, bid: p.bid, ask: p.ask, spread: p.spread, change24h: p.changePercent };
+            }
+          }
+          return next;
+        });
+      })
+      .catch(() => {});
+  }, []);
+
+  // WebSocket — zero delay live price stream (no polling, no throttle)
+  useEffect(() => {
+    let reconnectTimer: ReturnType<typeof setTimeout>;
+    let ws: WebSocket;
+
+    const connect = () => {
+      setWsStatus("connecting");
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setWsStatus("connected");
+        ws.send(JSON.stringify({ subscribe: ["prices"] }));
+      };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data) as { type: string; data: { symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number } };
+          if (msg.type === "prices" && msg.data) {
+            const p = msg.data;
+            if (p.bid > 0) {
+              setMarketData(prev => ({
+                ...prev,
+                [p.symbol]: { symbol: p.symbol, bid: p.bid, ask: p.ask, spread: p.spread, change24h: p.changePercent }
+              }));
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      };
+
+      ws.onclose = () => {
+        setWsStatus("disconnected");
+        wsRef.current = null;
+        reconnectTimer = setTimeout(connect, 1000);
+      };
+      ws.onerror = () => { ws.close(); };
+    };
+
+    connect();
+    return () => {
+      clearTimeout(reconnectTimer);
+      ws?.close();
+      wsRef.current = null;
+      setWsStatus("disconnected");
+    };
+  }, []);
+
+  // Filtered search results for add symbol dropdown
+  const searchResults = useMemo(() => {
+    if (!addInput.trim()) return [];
+    const q = addInput.toUpperCase().trim();
+    return allSymbols
+      .filter(s => !watchlist.includes(s.symbol) &&
+        (s.symbol.toUpperCase().includes(q) || s.description.toUpperCase().includes(q)))
+      .slice(0, 15);
+  }, [addInput, allSymbols, watchlist]);
+
+  const handleAdd = (sym: string) => {
     if (sym && !watchlist.includes(sym)) setWatchlist(prev => [...prev, sym]);
     setAddInput(""); setShowAdd(false);
   };
@@ -1094,6 +1150,14 @@ function MarketWatch({ isLive }: { isLive: boolean }) {
     const vol = volumeBySymbol[sym];
     return { sym, bid: md?.bid ?? 0, ask: md?.ask ?? 0, spread: md?.spread ?? 0, buyVol: vol?.buy ?? 0, sellVol: vol?.sell ?? 0, netVol: vol?.net ?? 0, change: md?.change24h ?? 0 };
   });
+  // Default sort: symbols with live prices first, then alphabetical
+  if (!sortCol) {
+    rows = [...rows].sort((a, b) => {
+      if (a.bid > 0 && b.bid <= 0) return -1;
+      if (a.bid <= 0 && b.bid > 0) return 1;
+      return a.sym.localeCompare(b.sym);
+    });
+  }
   if (sortCol) {
     rows = [...rows].sort((a, b) => {
       const av = sortCol === "symbol" ? a.sym : (a as Record<string, unknown>)[sortCol];
@@ -1103,9 +1167,7 @@ function MarketWatch({ isLive }: { isLive: boolean }) {
     });
   }
 
-  const totalBuy = Object.values(volumeBySymbol).reduce((s, v) => s + v.buy, 0).toFixed(1);
-  const totalSell = Object.values(volumeBySymbol).reduce((s, v) => s + v.sell, 0).toFixed(1);
-  const totalNet = (+totalBuy - +totalSell).toFixed(1);
+  const priceCount = Object.values(marketData).filter(m => m.bid > 0).length;
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1118,10 +1180,26 @@ function MarketWatch({ isLive }: { isLive: boolean }) {
         }}><span style={{ fontSize: 11 }}>{advanced ? "☑" : "☐"}</span> ADVANCED</button>
         <div style={{ flex: 1 }} />
         {showAdd ? (
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input value={addInput} onChange={e => setAddInput(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAdd()} placeholder="e.g. BTCUSD" autoFocus
-              style={{ width: 120, background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.t1, fontSize: 11, fontFamily: "'JetBrains Mono',monospace", outline: "none" }} />
-            <button onClick={handleAdd} style={{ padding: "5px 10px", borderRadius: 5, border: `1px solid ${C.teal}40`, background: C.tealBg, color: C.teal, fontSize: 10, fontWeight: 600, cursor: "pointer" }}>ADD</button>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", position: "relative" }}>
+            <div style={{ position: "relative" }}>
+              <input value={addInput} onChange={e => setAddInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && searchResults.length > 0 && searchResults[0]) handleAdd(searchResults[0].symbol); if (e.key === "Escape") { setShowAdd(false); setAddInput(""); } }}
+                placeholder="Search symbols..." autoFocus
+                style={{ width: 220, background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.t1, fontSize: 11, fontFamily: "'JetBrains Mono',monospace", outline: "none" }} />
+              {searchResults.length > 0 && (
+                <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, background: C.bg2, border: `1px solid ${C.border}`, borderRadius: 6, maxHeight: 250, overflow: "auto", zIndex: 100, boxShadow: "0 8px 24px rgba(0,0,0,0.5)" }}>
+                  {searchResults.map(s => (
+                    <div key={s.symbol} onClick={() => handleAdd(s.symbol)}
+                      onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+                      style={{ padding: "6px 10px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${C.border}` }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: C.t1, fontFamily: "'JetBrains Mono',monospace" }}>{s.symbol}</span>
+                      <span style={{ fontSize: 9, color: C.t3, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.description}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <button onClick={() => { setShowAdd(false); setAddInput(""); }} style={{ padding: "5px 10px", borderRadius: 5, border: `1px solid ${C.border}`, background: "transparent", color: C.t3, fontSize: 10, cursor: "pointer" }}>CANCEL</button>
           </div>
         ) : (
@@ -1151,10 +1229,10 @@ function MarketWatch({ isLive }: { isLive: boolean }) {
               return (
                 <Fragment key={sym}>
                   <tr onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
-                    <td style={{ padding: "10px 10px", borderBottom: bdr }}><span style={{ fontSize: 13, fontWeight: 600, color: C.t1, fontFamily: "'JetBrains Mono',monospace" }}>{sym}</span></td>
-                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: C.blue, borderBottom: bdr }}>{bid || "—"}</td>
-                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: C.red, borderBottom: bdr }}>{ask || "—"}</td>
-                    <td style={{ padding: "10px 10px", fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.t3, borderBottom: bdr }}>{spread || "—"}</td>
+                    <td style={{ padding: "10px 10px", borderBottom: bdr }}><span style={{ fontSize: 13, fontWeight: 600, color: bid > 0 ? C.t1 : C.t3, fontFamily: "'JetBrains Mono',monospace" }}>{sym}</span></td>
+                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: bid > 0 ? C.blue : C.t3, borderBottom: bdr, opacity: bid > 0 ? 1 : 0.4 }}>{bid > 0 ? bid : "No feed"}</td>
+                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: bid > 0 ? C.red : C.t3, borderBottom: bdr, opacity: bid > 0 ? 1 : 0.4 }}>{ask > 0 ? ask : "—"}</td>
+                    <td style={{ padding: "10px 10px", fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.t3, borderBottom: bdr }}>{spread ? spread.toFixed(bid > 100 ? 2 : 5) : "—"}</td>
                     <td style={{ padding: "10px 10px", borderBottom: bdr }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <div style={{ width: 50, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.06)" }}><div style={{ width: `${(buyVol / maxVol) * 100}%`, height: "100%", borderRadius: 2, background: C.blue, transition: "width 0.3s" }} /></div>
@@ -1194,10 +1272,10 @@ function MarketWatch({ isLive }: { isLive: boolean }) {
         </table>
       </div>
       <div style={{ padding: "8px 16px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 20, alignItems: "center" }}>
-        <span style={{ fontSize: 10, color: C.t3, fontFamily: "'JetBrains Mono',monospace" }}>TOTALS:</span>
-        <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.blue }}>BUY {totalBuy}</span>
-        <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.red }}>SELL {totalSell}</span>
-        <span style={{ fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono',monospace", color: +totalNet >= 0 ? C.green : C.red }}>NET {+totalNet >= 0 ? "+" : ""}{totalNet}</span>
+        <span style={{ fontSize: 10, color: C.t3, fontFamily: "'JetBrains Mono',monospace" }}>
+          {wsStatus === "connected" ? "🟢 LIVE" : wsStatus === "connecting" ? "🟡 CONNECTING" : "⚫ OFFLINE"} — MT5 PRICES
+        </span>
+        <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.teal }}>{priceCount}/{watchlist.length} symbols with data</span>
       </div>
     </div>
   );

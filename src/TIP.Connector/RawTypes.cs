@@ -156,6 +156,35 @@ public sealed record RawPosition
 }
 
 /// <summary>
+/// Raw tick statistics from MT5 TickStat API.
+/// Contains bid, ask, high, low, and volume data for a symbol.
+/// Available even for symbols that don't have recent live ticks flowing.
+/// </summary>
+public sealed record RawTickStat
+{
+    /// <summary>Trading instrument symbol.</summary>
+    public required string Symbol { get; init; }
+
+    /// <summary>Current bid price.</summary>
+    public required double Bid { get; init; }
+
+    /// <summary>Current ask price.</summary>
+    public required double Ask { get; init; }
+
+    /// <summary>Last deal price.</summary>
+    public required double Last { get; init; }
+
+    /// <summary>Session high bid price.</summary>
+    public required double High { get; init; }
+
+    /// <summary>Session low bid price.</summary>
+    public required double Low { get; init; }
+
+    /// <summary>Tick time in milliseconds since Unix epoch.</summary>
+    public required long TimeMsc { get; init; }
+}
+
+/// <summary>
 /// Raw symbol specification from the MT5 server.
 /// </summary>
 public sealed record RawSymbol

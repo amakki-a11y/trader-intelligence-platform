@@ -117,13 +117,49 @@ public sealed class PipelineOrchestrator
             // DealSink starts in BUFFER mode by default (or reset for reconnect)
             _dealSink.Reset();
 
+            // Wait for PUMP_MODE_FULL to sync before subscribing
+            // The pump needs time to initialize symbol/user data after Connect()
+            _logger.LogInformation("Waiting 3s for PUMP to sync before subscribing to events...");
+            await Task.Delay(3000, ct).ConfigureAwait(false);
+
+            // CRITICAL: Tell MT5 to stream ALL symbols via the pump.
+            // Without this, the pump only sends ticks for a small default set.
+            var selectedOk = _api.SelectedAddAll();
+            _logger.LogInformation("SelectedAddAll: {Result} — pump will now receive ticks for all symbols", selectedOk);
+
+            if (!selectedOk)
+            {
+                _logger.LogWarning("SelectedAddAll failed ({Error}), trying again after 2s...", _api.LastError);
+                await Task.Delay(2000, ct).ConfigureAwait(false);
+                selectedOk = _api.SelectedAddAll();
+                _logger.LogInformation("SelectedAddAll retry: {Result}", selectedOk);
+            }
+
             // Subscribe to live events — deals are buffered, ticks flow immediately
-            _api.SubscribeDeals();
-            _api.SubscribeTicks(config.GroupMask);
+            // Retry subscription up to 3 times with 2s delay if it fails
+            var dealSubOk = false;
+            var tickSubOk = false;
+            for (var attempt = 1; attempt <= 3; attempt++)
+            {
+                if (!dealSubOk) dealSubOk = _api.SubscribeDeals();
+                if (!tickSubOk) tickSubOk = _api.SubscribeTicks(config.GroupMask);
+
+                if (dealSubOk && tickSubOk) break;
+
+                _logger.LogWarning(
+                    "Subscription attempt {Attempt}/3 — deals={DealSub}, ticks={TickSub}, lastError={Error}. Retrying in 2s...",
+                    attempt, dealSubOk, tickSubOk, _api.LastError);
+                await Task.Delay(2000, ct).ConfigureAwait(false);
+            }
 
             _logger.LogInformation(
-                "Phase 1 complete — connected, deals buffered, ticks flowing. Cutoff: {CutoffTime}",
-                cutoffTime);
+                "Phase 1 complete — connected, deals subscribed={DealSub}, ticks subscribed={TickSub}. Cutoff: {CutoffTime}",
+                dealSubOk, tickSubOk, cutoffTime);
+
+            if (!tickSubOk)
+            {
+                _logger.LogError("CRITICAL: Tick subscription failed after 3 attempts — prices will NOT update! LastError: {Error}", _api.LastError);
+            }
 
             // ── Phase 2: BACKFILL ────────────────────────────────────────────
             TransitionTo(PipelineOrchestratorState.Backfilling);
