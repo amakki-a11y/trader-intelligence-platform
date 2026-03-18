@@ -249,8 +249,20 @@ try
         sp.GetRequiredService<PipelineOrchestrator>(),
         sp.GetRequiredService<IWebSocketBroadcaster>()));
 
-    // TODO: Phase 5, Task 15 — Register SimulationEngine
-    // TODO: Phase 5, Task 16 — Register StyleClassifier, BookRouter
+    // ── Intelligence Engines (Phase 5) ──────────────────────────────────────
+
+    builder.Services.AddSingleton<StyleClassifier>();
+    builder.Services.AddSingleton<BookRouter>();
+    builder.Services.AddSingleton<SimulationEngine>();
+
+    builder.Services.AddHostedService(sp => new IntelligenceService(
+        sp.GetRequiredService<ILogger<IntelligenceService>>(),
+        sp.GetRequiredService<AccountScorer>(),
+        sp.GetRequiredService<StyleClassifier>(),
+        sp.GetRequiredService<BookRouter>(),
+        sp.GetRequiredService<PipelineOrchestrator>(),
+        sp.GetRequiredService<TraderProfileRepository>(),
+        dbEnabled));
 
     var app = builder.Build();
 

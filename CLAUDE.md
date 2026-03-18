@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current state
-v2.0 in development — Phases 1-4 complete + real MT5 integration tested. Dashboard displays live data from MT5 server. Phase 5 next.
+v2.0 in development — Phases 1-5 complete + real MT5 integration tested. Dashboard displays live data from MT5 server. Phase 6 next: hardening, security, load testing.
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to the v1.0 RebateAbuseDetector.
@@ -42,7 +42,7 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 6. [x] Deal processing pipeline (DealProcessor + position tracking) ✅ (completed 2026-03-17)
 7. [x] Compute engines (P&L, Correlation, AccountScorer, Exposure, BotFingerprinter) ✅ (completed 2026-03-17)
 8. [x] React dashboard v2 + DealerHub WebSocket ✅ (rebuilt 2026-03-17)
-9. [ ] AI engines (StyleClassifier, BookRouter, SimulationEngine)
+9. [x] AI engines (StyleClassifier, BookRouter, SimulationEngine) ✅ (completed 2026-03-17)
 10. [ ] ML-based classification
 
 ## Coding Rules
@@ -180,3 +180,19 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 - Tested with 2 real accounts (86672693 "Test", 86672696 "test") in group Test\Mak — 35 deals backfilled, open positions showing, real balance/equity displayed
 - `dotnet build` — zero warnings, zero errors
 - `npx tsc --noEmit` — zero errors
+
+### Phase 5: AI Engines — StyleClassifier, BookRouter, SimulationEngine — ✅ DONE (2026-03-17)
+- **StyleClassifier** (TIP.Core/Engines): rule-based trading style classification (Scalper/DayTrader/Swing/EA/Manual/Mixed/Unknown). Multi-signal scoring: hold times, trade frequency, scalp ratio, expert ratio, timing entropy, unique EAs. Returns StyleResult with style, confidence (0-1), and signals list.
+- **BookRouter** (TIP.Core/Engines): book routing recommendation engine (ABook/BBook/Hybrid). Weighted scoring: abuse score, ring membership, trading style, profitability, timing precision, volume, expert ratio. Returns BookResult with recommendation, confidence, summary, and risk flags.
+- **SimulationEngine** (TIP.Core/Engines): P&L replay for what-if routing analysis. Simulates A-Book (commission only), B-Book (internalize — broker takes opposite side + spread capture), Hybrid (split by volume threshold). Returns timeline for charting + comparison with recommendation.
+- **IntelligenceService** (TIP.Api): BackgroundService running every 5 minutes. Classifies style + routes book for all scored accounts. Upserts TraderProfile to DB. Logs "Intelligence cycle complete" with A/B/Hybrid counts.
+- **TraderProfileRepository** (TIP.Data): full implementation — UpsertAsync, GetByLoginAsync, InsertScoreHistoryAsync, GetScoreHistoryAsync. Uses Npgsql with ON CONFLICT upsert semantics.
+- **IntelligenceController** (TIP.Api): REST endpoints — GET /api/intelligence/profiles (all), GET /api/intelligence/profiles/{login} (single profile with style + book), GET /api/intelligence/profiles/{login}/simulate (3-way routing comparison with timelines).
+- **IntelligenceDtos** (TIP.Api/Models): TraderProfileDto, ScoreHistoryDto, SimulationComparisonDto, SimulationResultDto, TimelinePointDto.
+- **Frontend — AI Routing tab**: 5th tab in AccountDetail. Style card with badge + confidence bar + signals list. Book recommendation card with badge + confidence + summary + risk flags (red for CRITICAL/Ring). Simulation chart (recharts LineChart) showing cumulative broker P&L for all 3 modes. Summary table: Broker P&L, Commission, Spread Capture, Client P&L, Trades for each mode.
+- **Tests**: StyleClassifierTests (8 tests), BookRouterTests (8 tests), SimulationEngineTests (6 tests) — 22 new tests
+- `dotnet build` — zero warnings, zero errors
+- `npx tsc --noEmit` — zero errors
+- All 143 tests passing (121 existing + 22 new)
+- **Phases 1-5 COMPLETE.**
+- **Next up:** Phase 6 — Hardening, security, load testing
