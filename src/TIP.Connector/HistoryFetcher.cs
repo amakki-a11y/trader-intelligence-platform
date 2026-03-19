@@ -136,6 +136,7 @@ public sealed class HistoryFetcher : IDisposable
                         ExpertId: raw.ExpertId,
                         Comment: raw.Comment,
                         PositionId: raw.PositionId,
+                        Entry: (int)raw.Entry,
                         ReceivedAt: DateTimeOffset.UtcNow);
 
                     _dealWriter.TryWrite(dealEvent);

@@ -317,6 +317,7 @@ public sealed class MT5Connection : BackgroundService
             ExpertId: raw.ExpertId,
             Comment: raw.Comment,
             PositionId: raw.PositionId,
+            Entry: (int)raw.Entry,
             ReceivedAt: DateTimeOffset.UtcNow);
     }
 }

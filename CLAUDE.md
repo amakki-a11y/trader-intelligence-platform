@@ -296,3 +296,16 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 - `dotnet build` — zero warnings, zero errors
 - `npx tsc --noEmit` — zero errors
 - All 163 tests passing
+
+### Phase 6.3: Deal Entry Type Pipeline — ✅ DONE (2026-03-19)
+- **MT5 Entry field captured**: RawDeal.Entry (0=IN, 1=OUT, 2=INOUT, 3=OUT_BY) captured from CIMTDeal.Entry() in MT5ApiReal.
+- **Full pipeline propagation**: Entry flows through RawDeal → DealEvent → DealRecord → DealEventDto → WebSocket → Frontend.
+- **Database**: `ALTER TABLE deals ADD COLUMN entry smallint DEFAULT 0`. DealRepository COPY, INSERT, SELECT all include entry column.
+- **REST API**: `/api/accounts/{login}/deals` now returns `entry` field. Scan endpoint writes entry to DB.
+- **ComputeEngineService**: Maps entry int → human-readable string (IN→Open, OUT→Close, INOUT→Reverse, OUT_BY→Close By) for DealEventDto broadcast.
+- **Frontend LiveMonitor**: Shows entry type label with color coding (Open=blue, Close=amber, Deposit=green, Withdrawal=red, Bonus=purple). No longer filters out non-trade deals — deposits, withdrawals, bonuses all visible.
+- **Frontend AccountDetail History**: New "Type" column showing entry type (Open/Close/Reverse/Close By/Deposit/Withdrawal/Bonus) with color coding.
+- **MT5ApiSimulator**: Sets Entry=0 for all generated deals.
+- `dotnet build` — zero warnings, zero errors
+- `npx tsc --noEmit` — zero errors
+- All 163 tests passing

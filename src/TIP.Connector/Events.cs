@@ -22,6 +22,7 @@ namespace TIP.Connector;
 /// <param name="ExpertId">Expert Advisor ID that placed the deal (0 if manual).</param>
 /// <param name="Comment">Free-text comment attached to the deal.</param>
 /// <param name="PositionId">Position ticket this deal belongs to (for grouping entry/exit).</param>
+/// <param name="Entry">Deal entry type: 0=IN (open), 1=OUT (close), 2=INOUT (reverse), 3=OUT_BY (close by).</param>
 /// <param name="ReceivedAt">UTC timestamp when TIP received this event from MT5.</param>
 public sealed record DealEvent(
     ulong DealId,
@@ -39,6 +40,7 @@ public sealed record DealEvent(
     ulong ExpertId,
     string Comment,
     ulong PositionId,
+    int Entry,
     DateTimeOffset ReceivedAt);
 
 /// <summary>

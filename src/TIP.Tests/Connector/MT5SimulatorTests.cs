@@ -186,7 +186,8 @@ public class MT5SimulatorTests
             Reason = 0,
             ExpertId = 0,
             Comment = "",
-            PositionId = 1
+            PositionId = 1,
+            Entry = 0
         };
 
         Assert.AreEqual(1.0, deal.VolumeLots);

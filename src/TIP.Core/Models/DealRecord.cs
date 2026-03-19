@@ -58,6 +58,9 @@ public class DealRecord
     /// <summary>Position ticket this deal belongs to.</summary>
     public ulong PositionId { get; set; }
 
+    /// <summary>Deal entry type: 0=IN (open), 1=OUT (close), 2=INOUT (reverse), 3=OUT_BY (close by).</summary>
+    public int Entry { get; set; }
+
     /// <summary>UTC timestamp when TIP received this event.</summary>
     public DateTimeOffset ReceivedAt { get; set; }
 

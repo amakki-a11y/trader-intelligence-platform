@@ -281,6 +281,7 @@ public sealed class DealWriterService : BackgroundService
             ExpertId = deal.ExpertId,
             Comment = deal.Comment,
             PositionId = deal.PositionId,
+            Entry = deal.Entry,
             ReceivedAt = deal.ReceivedAt,
             Server = _serverName
         };

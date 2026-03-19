@@ -58,6 +58,9 @@ public sealed record RawDeal
     /// <summary>Position ticket this deal belongs to (links open/close deals).</summary>
     public required ulong PositionId { get; init; }
 
+    /// <summary>Deal entry type: 0=IN (open), 1=OUT (close), 2=INOUT (reverse), 3=OUT_BY (close by).</summary>
+    public required uint Entry { get; init; }
+
     /// <summary>Volume in standard lots (VolumeRaw / 10000.0).</summary>
     public double VolumeLots => VolumeRaw / 10000.0;
 }

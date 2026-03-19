@@ -311,7 +311,8 @@ public sealed class MT5ApiSimulator : IMT5Api
                 Reason = (uint)_random.Next(2), // CLIENT or EXPERT
                 ExpertId = _random.Next(3) == 0 ? (ulong)_random.Next(1000, 9999) : 0,
                 Comment = "",
-                PositionId = (ulong)dealId // Simplified: each deal is its own position
+                PositionId = (ulong)dealId, // Simplified: each deal is its own position
+                Entry = 0 // Simulator always generates IN (open) deals
             };
 
             OnDealAdd?.Invoke(deal);

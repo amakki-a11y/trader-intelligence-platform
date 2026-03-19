@@ -52,6 +52,7 @@ CREATE TABLE deals (
     expert_id   BIGINT            NOT NULL DEFAULT 0,
     comment     TEXT              NOT NULL DEFAULT '',
     position_id BIGINT            NOT NULL DEFAULT 0,
+    entry       SMALLINT          NOT NULL DEFAULT 0,
     server      TEXT              NOT NULL DEFAULT ''
 );
 

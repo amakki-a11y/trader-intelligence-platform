@@ -205,6 +205,7 @@ public sealed class AnalyticsController : ControllerBase
             expertId = d.ExpertId,
             comment = d.Comment,
             positionId = d.PositionId,
+            entry = (int)d.Entry,
         }));
     }
 
@@ -323,6 +324,7 @@ public sealed class AnalyticsController : ControllerBase
                     ExpertId = d.ExpertId,
                     Comment = d.Comment,
                     PositionId = d.PositionId,
+                    Entry = (int)d.Entry,
                     Server = connectionConfig.ServerAddress
                 }).ToList();
 

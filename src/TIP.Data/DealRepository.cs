@@ -32,7 +32,7 @@ public sealed class DealRepository
     /// </summary>
     private const string CopySql =
         "COPY deals (deal_id, login, time, time_msc, symbol, action, volume, price, " +
-        "profit, commission, swap, fee, reason, expert_id, comment, position_id, server) " +
+        "profit, commission, swap, fee, reason, expert_id, comment, position_id, entry, server) " +
         "FROM STDIN (FORMAT BINARY)";
 
     /// <summary>
@@ -40,9 +40,9 @@ public sealed class DealRepository
     /// </summary>
     private const string InsertSql =
         "INSERT INTO deals (deal_id, login, time, time_msc, symbol, action, volume, price, " +
-        "profit, commission, swap, fee, reason, expert_id, comment, position_id, server) " +
+        "profit, commission, swap, fee, reason, expert_id, comment, position_id, entry, server) " +
         "VALUES (@deal_id, @login, @time, @time_msc, @symbol, @action, @volume, @price, " +
-        "@profit, @commission, @swap, @fee, @reason, @expert_id, @comment, @position_id, @server) " +
+        "@profit, @commission, @swap, @fee, @reason, @expert_id, @comment, @position_id, @entry, @server) " +
         "ON CONFLICT (deal_id, server, time) DO NOTHING";
 
     /// <summary>
@@ -50,7 +50,7 @@ public sealed class DealRepository
     /// </summary>
     private const string SelectByLoginSql =
         "SELECT deal_id, login, time, time_msc, symbol, action, volume, price, " +
-        "profit, commission, swap, fee, reason, expert_id, comment, position_id, server " +
+        "profit, commission, swap, fee, reason, expert_id, comment, position_id, entry, server " +
         "FROM deals " +
         "WHERE login = @login AND time >= @from AND time <= @to " +
         "ORDER BY time DESC " +
@@ -107,6 +107,7 @@ public sealed class DealRepository
             await writer.WriteAsync((long)deal.ExpertId, NpgsqlDbType.Bigint, cancellationToken).ConfigureAwait(false);
             await writer.WriteAsync(deal.Comment, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
             await writer.WriteAsync((long)deal.PositionId, NpgsqlDbType.Bigint, cancellationToken).ConfigureAwait(false);
+            await writer.WriteAsync((short)deal.Entry, NpgsqlDbType.Smallint, cancellationToken).ConfigureAwait(false);
             await writer.WriteAsync(deal.Server, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
         }
 
@@ -144,6 +145,7 @@ public sealed class DealRepository
         cmd.Parameters.AddWithValue("expert_id", (long)deal.ExpertId);
         cmd.Parameters.AddWithValue("comment", deal.Comment);
         cmd.Parameters.AddWithValue("position_id", (long)deal.PositionId);
+        cmd.Parameters.AddWithValue("entry", (short)deal.Entry);
         cmd.Parameters.AddWithValue("server", deal.Server);
 
         await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -201,7 +203,8 @@ public sealed class DealRepository
                 ExpertId = (ulong)reader.GetInt64(13),
                 Comment = reader.GetString(14),
                 PositionId = (ulong)reader.GetInt64(15),
-                Server = reader.GetString(16)
+                Entry = reader.GetInt16(16),
+                Server = reader.GetString(17)
             });
         }
 
@@ -222,7 +225,7 @@ public sealed class DealRepository
         var filterByServer = !string.IsNullOrEmpty(_serverName);
 
         var sql = "SELECT deal_id, login, time, time_msc, symbol, action, volume, price, " +
-                  "profit, commission, swap, fee, reason, expert_id, comment, position_id, server " +
+                  "profit, commission, swap, fee, reason, expert_id, comment, position_id, entry, server " +
                   "FROM deals" +
                   (filterByServer ? " WHERE server = @server" : "") +
                   " ORDER BY time ASC";
@@ -254,7 +257,8 @@ public sealed class DealRepository
                 ExpertId = (ulong)reader.GetInt64(13),
                 Comment = reader.GetString(14),
                 PositionId = (ulong)reader.GetInt64(15),
-                Server = reader.GetString(16)
+                Entry = reader.GetInt16(16),
+                Server = reader.GetString(17)
             });
         }
 

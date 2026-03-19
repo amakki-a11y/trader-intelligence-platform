@@ -62,7 +62,7 @@ interface Account {
 interface Deal {
   ticket: number; time: string; login: number; symbol: string; action: string;
   volume: number; price: number; profit: number; commission: number; swap: number;
-  reason: string; expertId: number; holdSec: number;
+  reason: string; expertId: number; holdSec: number; entry: string;
 }
 interface OpenTrade {
   ticket: number; time: string; symbol: string; action: string; volume: number;
@@ -73,7 +73,7 @@ interface MarketDataPoint { symbol: string; bid: number; ask: number; spread: nu
 interface LiveEvent {
   id: number; time: string; login: number; name: string; symbol: string; action: string;
   volume: number; score: number; scoreChange: number; isCorrelated: boolean;
-  correlated: number | null; severity: string;
+  correlated: number | null; severity: string; entry: string;
 }
 interface VolumeData { buy: number; sell: number; net: number; topBuyer: { login: number; volume: number }; topSeller: { login: number; volume: number } }
 
@@ -106,6 +106,7 @@ function generateDeals(login: number, count = 50): Deal[] {
       profit: +profit, commission, swap: randFloat(-5, 5, 2),
       reason: Math.random() > 0.3 ? "EXPERT" : "CLIENT",
       expertId: pick(EAS), holdSec: randBetween(2, 7200),
+      entry: action === "BUY" || action === "SELL" ? "Open" : "",
     });
   }
   return deals;
@@ -411,6 +412,7 @@ function AccountDetail({ account, version, onBack }: { account: Account; version
       .then((data: any[]) => {
         if (!Array.isArray(data)) return;
         const actionMap: Record<number, string> = { 0: "BUY", 1: "SELL", 2: "BALANCE", 3: "CREDIT", 4: "CHARGE", 5: "CORRECTION", 6: "BONUS" };
+        const entryMap: Record<number, string> = { 0: "Open", 1: "Close", 2: "Reverse", 3: "Close By" };
         setDeals(data.map(d => ({
           ticket: d.dealId,
           time: d.time,
@@ -425,6 +427,7 @@ function AccountDetail({ account, version, onBack }: { account: Account; version
           reason: d.reason?.toString() ?? "",
           expertId: d.expertId ?? 0,
           holdSec: 0,
+          entry: d.action === 2 ? (d.profit >= 0 ? "Deposit" : "Withdrawal") : d.action === 6 ? "Bonus" : (entryMap[d.entry] ?? ""),
         })));
       })
       .catch(() => {});
@@ -649,21 +652,24 @@ function AccountDetail({ account, version, onBack }: { account: Account; version
       {tab === "history" && (
         <div style={{ overflow: "auto", maxHeight: 340 }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>{["Ticket","Time","Symbol","Action","Vol","Price","Profit","Comm","Reason","EA","Hold"].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr></thead>
+            <thead><tr>{["Ticket","Time","Type","Symbol","Action","Vol","Price","Profit","Comm","Reason","EA"].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr></thead>
             <tbody>
-              {deals.slice(0, 40).map(d => (
+              {deals.slice(0, 40).map(d => {
+                const entryColor = d.entry === "Open" ? C.blue : d.entry === "Close" || d.entry === "Close By" ? C.amber : d.entry === "Deposit" ? C.green : d.entry === "Withdrawal" ? C.red : d.entry === "Bonus" ? C.purple : C.t3;
+                return (
                 <tr key={d.ticket}>
                   <td style={tdStyle}>{d.ticket}</td>
                   <td style={tdStyle}>{new Date(d.time).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                  <td style={{ ...tdStyle, color: entryColor, fontWeight: 600, fontSize: 10 }}>{d.entry || "—"}</td>
                   <td style={tdStyle}>{d.symbol}</td>
-                  <td style={{ ...tdStyle, color: d.action === "BUY" ? C.blue : C.red }}>{d.action}</td>
+                  <td style={{ ...tdStyle, color: d.action === "BUY" ? C.blue : d.action === "SELL" ? C.red : C.t2 }}>{d.action}</td>
                   <td style={tdStyle}>{d.volume}</td><td style={tdStyle}>{d.price}</td>
                   <td style={{ ...tdStyle, color: d.profit >= 0 ? C.green : C.red }}>{d.profit >= 0 ? "+" : ""}{d.profit}</td>
                   <td style={tdStyle}>${d.commission}</td><td style={tdStyle}>{d.reason}</td>
                   <td style={tdStyle}>{d.expertId || "—"}</td>
-                  <td style={tdStyle}>{d.holdSec < 60 ? d.holdSec + "s" : Math.round(d.holdSec / 60) + "m"}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -887,6 +893,7 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
     const loadRecent = async () => {
       try {
         const actionMap: Record<number, string> = { 0: "BUY", 1: "SELL", 2: "BALANCE", 3: "CREDIT", 4: "CHARGE", 5: "CORRECTION", 6: "BONUS" };
+        const entryMap: Record<number, string> = { 0: "Open", 1: "Close", 2: "Reverse", 3: "Close By" };
         const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
         // Fetch real account list from API (not the prop which may still have dummy data)
         const acctRes = await fetch("/api/accounts");
@@ -903,9 +910,8 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
             for (const d of data) {
               const did = Number(d.dealId);
               if (!did || seenIds.has(did)) continue;
-              // Only show trade actions (BUY=0, SELL=1), skip BALANCE/BONUS/etc
-              if (d.action !== 0 && d.action !== 1) continue;
               seenIds.add(did);
+              const entryLabel = d.action === 2 ? (d.profit >= 0 ? "Deposit" : "Withdrawal") : d.action === 6 ? "Bonus" : (entryMap[d.entry] ?? "");
               allDeals.push({
                 id: did,
                 time: d.time ? new Date(d.time).toLocaleTimeString("en-GB") : "",
@@ -916,6 +922,7 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
                 score: acc.abuseScore ?? 0, scoreChange: 0,
                 isCorrelated: false, correlated: null,
                 severity: acc.riskLevel === "Critical" ? "CRITICAL" : acc.riskLevel === "High" ? "HIGH" : acc.riskLevel === "Medium" ? "MEDIUM" : "LOW",
+                entry: entryLabel,
               });
             }
           } catch { /* skip this account */ }
@@ -950,19 +957,24 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
           setEvents(prev => {
             // Double-check against React state in case of race with REST load
             if (prev.some(e => e.id === did)) return prev;
+            const wsEntryMap: Record<string, string> = { "IN": "Open", "OUT": "Close", "INOUT": "Reverse", "OUT_BY": "Close By" };
+            const entryRaw = d.entry ?? "";
+            const act = d.action ?? "";
+            const wsEntry = act === "BALANCE" ? (d.profit >= 0 ? "Deposit" : "Withdrawal") : act === "BONUS" ? "Bonus" : (wsEntryMap[entryRaw] ?? entryRaw);
             return [{
               id: did,
               time,
               login: d.login,
               name: d.login?.toString() ?? "",
               symbol: d.symbol ?? "",
-              action: d.action ?? "",
+              action: act,
               volume: d.volume ?? 0,
               score: d.score ?? 0,
               scoreChange: d.scoreChange ?? 0,
               isCorrelated: d.isCorrelated ?? false,
               correlated: null,
               severity: d.severity ?? "Low",
+              entry: wsEntry,
             }, ...prev].slice(0, 200);
           });
         } catch { /* ignore parse errors */ }
@@ -1010,7 +1022,8 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
             onMouseLeave={e => { e.currentTarget.style.background = ev.isCorrelated ? "rgba(255,82,82,0.06)" : "transparent"; }}>
             <span style={{ fontSize: 10, color: C.t3, fontFamily: "'JetBrains Mono',monospace", width: 60, flexShrink: 0 }}>{ev.time}</span>
             <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.t1, width: 48, flexShrink: 0 }}>{ev.login}</span>
-            <span style={{ fontSize: 11, color: ev.action === "BUY" ? C.blue : C.red, width: 30, flexShrink: 0 }}>{ev.action}</span>
+            <span style={{ fontSize: 10, fontWeight: 600, flexShrink: 0, width: 58, color: ev.entry === "Open" ? C.blue : ev.entry === "Close" || ev.entry === "Close By" ? C.amber : ev.entry === "Deposit" ? C.green : ev.entry === "Withdrawal" ? C.red : ev.entry === "Bonus" ? C.purple : C.t3 }}>{ev.entry || "—"}</span>
+            <span style={{ fontSize: 11, color: ev.action === "BUY" ? C.blue : ev.action === "SELL" ? C.red : C.t2, width: 55, flexShrink: 0 }}>{ev.action}</span>
             <span style={{ fontSize: 11, color: C.t2, width: 65, flexShrink: 0 }}>{ev.symbol}</span>
             <span style={{ fontSize: 11, color: C.t2, width: 35 }}>{ev.volume}</span>
             <div style={{ flex: 1 }} />

@@ -223,13 +223,14 @@ public sealed class ComputeEngineService : BackgroundService
 
         // Step 6: Broadcast deal event to Live Monitor clients
         var actionName = deal.Action switch { 0 => "BUY", 1 => "SELL", 2 => "BALANCE", 6 => "BONUS", _ => $"ACTION_{deal.Action}" };
+        var entryName = deal.Entry switch { 0 => "IN", 1 => "OUT", 2 => "INOUT", 3 => "OUT_BY", _ => "" };
         await _broadcaster.BroadcastDealEvent(new DealEventDto(
             deal.DealId, deal.Login, deal.Symbol, actionName,
             deal.Volume, deal.Price, deal.Profit,
             account.AbuseScore, account.AbuseScore - account.PreviousScore,
             account.IsRingMember,
             account.RiskLevel.ToString(),
-            deal.TimeMsc)).ConfigureAwait(false);
+            deal.TimeMsc, entryName)).ConfigureAwait(false);
 
         // Step 7: Broadcast account update to WebSocket clients (AbuseGrid)
         await _broadcaster.BroadcastAccountUpdate(new AccountSummaryDto(

@@ -60,6 +60,7 @@ public class PipelineOrchestratorTests
             ExpertId: 0,
             Comment: "",
             PositionId: dealId,
+            Entry: 0,
             ReceivedAt: DateTimeOffset.UtcNow);
     }
 

@@ -475,7 +475,8 @@ public sealed class MT5ApiReal : IMT5Api
             Reason = deal.Reason(),
             ExpertId = (ulong)deal.ExpertID(),
             Comment = deal.Comment(),
-            PositionId = (ulong)deal.PositionID()
+            PositionId = (ulong)deal.PositionID(),
+            Entry = deal.Entry()
         };
     }
 
