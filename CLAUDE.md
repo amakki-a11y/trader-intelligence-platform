@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current State
-v2.0 Phases 1-6 complete + Sprints 1-5 hardening done + server-switch reset flow. 168 tests passing. 2 real accounts scored from 59 historical deals. 3,428 MT5 symbols cached, live tick streaming. Tick-only pricing. Data persisting to TimescaleDB. Credentials in User Secrets. Clean server switching (all in-memory state reset on reconnect).
+v2.0 Phases 1-6 complete + Sprints 1-5 hardening done + server-switch reset flow. 168 tests passing. Tested on two MT5 servers (89.21.67.56 and 31.14.254.217). Live tick streaming, tick-only pricing. Data persisting to TimescaleDB. Credentials in User Secrets. Clean server switching with auto-resolved symbol watchlist.
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to v1.0 RebateAbuseDetector.
@@ -71,7 +71,7 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 | 5 | AI Engines (StyleClassifier, BookRouter, Simulation) | 2026-03-17 | 143 |
 | 6 | Hardening: circuit breakers, error handling, security | 2026-03-18/19 | 165 |
 | S1-5 | Sprints 1-5: critical fixes, backend, frontend, hardening, polish | 2026-03-19 | 165 |
-| — | Server-switch reset flow: clean state on reconnect to new server | 2026-03-19 | 168 |
+| — | Server-switch reset flow + auto-resolved watchlist | 2026-03-19 | 168 |
 
 See `docs/CHANGELOG.md` for detailed per-phase progress log.
 
@@ -90,3 +90,4 @@ See `docs/CHANGELOG.md` for detailed per-phase progress log.
 7. **User Secrets for credentials** — MT5 password and DB password never in appsettings.json; CHANGE_ME placeholders only
 8. **Three-phase startup** — Buffer/Backfill/Live ensures zero deal loss during reconnect with dedup via DealSink seenIds
 9. **Server-switch reset** — PipelineOrchestrator clears all engine state (AccountScorer, PnL, Correlation, Exposure, PriceCache, server names) before connecting to new server. Pre-live warmup reloads positions + replays deals from DB. Callbacks bridge TIP.Connector → TIP.Api without violating dependency graph
+10. **Auto-resolved watchlist** — Market Watch resolves base symbol names (EURUSD, US30) to server-specific names at runtime (exact → dash suffix → shortest match). Works across servers with different naming conventions
