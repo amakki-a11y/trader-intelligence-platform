@@ -113,6 +113,15 @@ public sealed class ExposureEngine
     }
 
     /// <summary>
+    /// Clears all exposure data. Called on server switch.
+    /// </summary>
+    public void Reset()
+    {
+        _bySymbol.Clear();
+        _logger.LogInformation("ExposureEngine reset — cleared all exposure data");
+    }
+
+    /// <summary>
     /// Gets the number of symbols with exposure.
     /// </summary>
     public int SymbolCount => _bySymbol.Count;

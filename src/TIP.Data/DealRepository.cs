@@ -24,7 +24,7 @@ public sealed class DealRepository
 {
     private readonly ILogger<DealRepository> _logger;
     private readonly DbConnectionFactory _dbFactory;
-    private readonly string _serverName;
+    private volatile string _serverName;
     private long _totalInserted;
 
     /// <summary>
@@ -73,6 +73,15 @@ public sealed class DealRepository
     /// Total deals inserted since startup.
     /// </summary>
     public long TotalInserted => Interlocked.Read(ref _totalInserted);
+
+    /// <summary>
+    /// Updates the server name filter used by GetAllDealsAsync. Called on server switch.
+    /// </summary>
+    public void UpdateServerName(string serverName)
+    {
+        _serverName = serverName;
+        _logger.LogInformation("DealRepository server name updated to '{Server}'", serverName);
+    }
 
     /// <summary>
     /// Bulk inserts deals using the COPY protocol for high-throughput backfill.

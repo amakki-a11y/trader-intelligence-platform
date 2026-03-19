@@ -91,6 +91,14 @@ public sealed class PriceCache
     public int Count => _prices.Count;
 
     /// <summary>
+    /// Clears all cached prices. Called on server switch to remove stale symbols.
+    /// </summary>
+    public void Clear()
+    {
+        _prices.Clear();
+    }
+
+    /// <summary>
     /// Resets the session for a single symbol — current price becomes the new session open.
     /// </summary>
     public void ResetSession(string symbol)

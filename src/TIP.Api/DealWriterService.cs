@@ -34,7 +34,7 @@ public sealed class DealWriterService : BackgroundService
     private readonly bool _dbEnabled;
     private readonly int _batchSize;
     private readonly int _flushIntervalMs;
-    private readonly string _serverName;
+    private volatile string _serverName;
     private List<DealRecord> _buffer;
     private readonly object _bufferLock = new();
     private readonly CircuitBreaker<int> _dbCircuit;
@@ -81,6 +81,15 @@ public sealed class DealWriterService : BackgroundService
     /// Total deals processed since startup.
     /// </summary>
     public long TotalProcessed => Interlocked.Read(ref _totalProcessed);
+
+    /// <summary>
+    /// Updates the server name tag for new deal records. Called on server switch.
+    /// </summary>
+    public void UpdateServerName(string serverName)
+    {
+        _serverName = serverName;
+        _logger.LogInformation("DealWriterService server name updated to '{Server}'", serverName);
+    }
 
     /// <summary>
     /// Main service loop: reads deals from the channel and batches them for database writes.

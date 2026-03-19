@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using TIP.Connector;
+using TIP.Core.Engines;
 
 namespace TIP.Tests.Connector;
 
@@ -37,6 +38,10 @@ public class PipelineOrchestratorTests
 
         var orchestrator = new PipelineOrchestrator(
             api, dealSink, tickListener, historyFetcher, syncTracker,
+            new AccountScorer(new RuleEngine(Array.Empty<Rule>()), new CorrelationEngine(NullLogger<CorrelationEngine>.Instance), NullLogger<AccountScorer>.Instance),
+            new CorrelationEngine(NullLogger<CorrelationEngine>.Instance),
+            new PnLEngine(NullLogger<PnLEngine>.Instance),
+            new ExposureEngine(NullLogger<ExposureEngine>.Instance),
             NullLogger<PipelineOrchestrator>.Instance);
 
         return (orchestrator, dealSink, dealChannel);
@@ -105,6 +110,10 @@ public class PipelineOrchestratorTests
 
         var orchestrator = new PipelineOrchestrator(
             api, dealSink, tickListener, historyFetcher, syncTracker,
+            new AccountScorer(new RuleEngine(Array.Empty<Rule>()), new CorrelationEngine(NullLogger<CorrelationEngine>.Instance), NullLogger<AccountScorer>.Instance),
+            new CorrelationEngine(NullLogger<CorrelationEngine>.Instance),
+            new PnLEngine(NullLogger<PnLEngine>.Instance),
+            new ExposureEngine(NullLogger<ExposureEngine>.Instance),
             NullLogger<PipelineOrchestrator>.Instance);
 
         // Manually put deals into DealSink buffer before orchestrator runs

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using TIP.Core.Engines;
 
 namespace TIP.Connector;
 
@@ -29,7 +30,20 @@ public sealed class PipelineOrchestrator
     private readonly TickListener _tickListener;
     private readonly HistoryFetcher _historyFetcher;
     private readonly SyncStateTracker _syncTracker;
+    private readonly AccountScorer _accountScorer;
+    private readonly CorrelationEngine _correlationEngine;
+    private readonly PnLEngine _pnlEngine;
+    private readonly ExposureEngine _exposureEngine;
     private readonly ILogger<PipelineOrchestrator> _logger;
+
+    /// <summary>Callback invoked during Phase 1 to clear TIP.Api state (PriceCache, user cache, server names).</summary>
+    private readonly Action<string>? _onServerSwitch;
+
+    /// <summary>Callback invoked after pump sync to reload SymbolCache from new server.</summary>
+    private readonly Action? _onSymbolReload;
+
+    /// <summary>Callback invoked between backfill and go-live to warm up scorer + load positions.</summary>
+    private readonly Func<CancellationToken, Task>? _onPreLiveWarmup;
 
     private long _backfilledDeals;
     private long _backfilledTicks;
@@ -64,26 +78,34 @@ public sealed class PipelineOrchestrator
     /// <summary>
     /// Initializes the pipeline orchestrator with all required dependencies.
     /// </summary>
-    /// <param name="api">MT5 API (real or simulator).</param>
-    /// <param name="dealSink">Deal sink for buffer/live mode switching.</param>
-    /// <param name="tickListener">Tick listener for price cache + channel writes.</param>
-    /// <param name="historyFetcher">History fetcher for backfill operations.</param>
-    /// <param name="syncTracker">Sync state tracker for checkpoint management.</param>
-    /// <param name="logger">Logger for state transition events.</param>
     public PipelineOrchestrator(
         IMT5Api api,
         DealSink dealSink,
         TickListener tickListener,
         HistoryFetcher historyFetcher,
         SyncStateTracker syncTracker,
-        ILogger<PipelineOrchestrator> logger)
+        AccountScorer accountScorer,
+        CorrelationEngine correlationEngine,
+        PnLEngine pnlEngine,
+        ExposureEngine exposureEngine,
+        ILogger<PipelineOrchestrator> logger,
+        Action<string>? onServerSwitch = null,
+        Action? onSymbolReload = null,
+        Func<CancellationToken, Task>? onPreLiveWarmup = null)
     {
         _api = api;
         _dealSink = dealSink;
         _tickListener = tickListener;
         _historyFetcher = historyFetcher;
         _syncTracker = syncTracker;
+        _accountScorer = accountScorer;
+        _correlationEngine = correlationEngine;
+        _pnlEngine = pnlEngine;
+        _exposureEngine = exposureEngine;
         _logger = logger;
+        _onServerSwitch = onServerSwitch;
+        _onSymbolReload = onSymbolReload;
+        _onPreLiveWarmup = onPreLiveWarmup;
     }
 
     /// <summary>
@@ -117,6 +139,15 @@ public sealed class PipelineOrchestrator
             // DealSink starts in BUFFER mode by default (or reset for reconnect)
             _dealSink.Reset();
 
+            // Reset all engine state to prevent old server data from contaminating new session
+            _logger.LogInformation("Resetting all engine state for server session...");
+            _accountScorer.Reset();
+            _correlationEngine.Clear();
+            _pnlEngine.Reset();
+            _exposureEngine.Reset();
+            _onServerSwitch?.Invoke(config.ServerAddress);
+            _logger.LogInformation("Engine state reset complete — ready for {Server}", config.ServerAddress);
+
             // Wait for PUMP_MODE_FULL to sync before subscribing
             // The pump needs time to initialize symbol/user data after Connect()
             _logger.LogInformation("Waiting 3s for PUMP to sync before subscribing to events...");
@@ -134,6 +165,9 @@ public sealed class PipelineOrchestrator
                 selectedOk = _api.SelectedAddAll();
                 _logger.LogInformation("SelectedAddAll retry: {Result}", selectedOk);
             }
+
+            // Reload SymbolCache from new server (after pump sync)
+            _onSymbolReload?.Invoke();
 
             // Subscribe to live events — deals are buffered, ticks flow immediately
             // Retry subscription up to 3 times with 2s delay if it fails
@@ -195,6 +229,14 @@ public sealed class PipelineOrchestrator
             _logger.LogInformation(
                 "Phase 2 complete — backfilled {DealCount} deals for {LoginCount} logins (tick backfill skipped — live ticks active)",
                 seenDealIds.Count, logins.Length);
+
+            // ── Pre-Live Warmup: reload positions + replay historical deals ──
+            if (_onPreLiveWarmup != null)
+            {
+                _logger.LogInformation("Running pre-live warmup (positions + historical deal scoring)...");
+                await _onPreLiveWarmup(ct).ConfigureAwait(false);
+                _logger.LogInformation("Pre-live warmup complete");
+            }
 
             // ── Phase 3: GO LIVE ─────────────────────────────────────────────
             TransitionTo(PipelineOrchestratorState.Replaying);

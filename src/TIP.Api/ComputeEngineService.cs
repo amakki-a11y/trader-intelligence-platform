@@ -80,6 +80,39 @@ public sealed class ComputeEngineService : BackgroundService
     public long DealsProcessed => Interlocked.Read(ref _dealsProcessed);
 
     /// <summary>
+    /// Replays all historical deals from DB through the scoring pipeline.
+    /// Called on startup and on server switch (via PipelineOrchestrator callback).
+    /// </summary>
+    public async Task WarmupFromDatabase(CancellationToken ct)
+    {
+        if (!_dbEnabled) return;
+        try
+        {
+            var warmupCount = 0;
+            await foreach (var batch in _dealRepository.GetAllDealsBatchedAsync(ct: ct).ConfigureAwait(false))
+            {
+                foreach (var deal in batch)
+                {
+                    _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId,
+                        deal.Login, deal.Symbol, deal.TimeMsc);
+                    _accountScorer.ProcessDeal(
+                        deal.DealId, deal.Login, deal.Action, deal.Volume, deal.Profit,
+                        deal.Commission, deal.Swap, deal.ExpertId, deal.Reason,
+                        deal.TimeMsc, deal.Symbol, deal.PositionId);
+                    warmupCount++;
+                }
+            }
+            _logger.LogInformation(
+                "ComputeEngineService warmup: replayed {Count} historical deals, {Accounts} accounts scored",
+                warmupCount, _accountScorer.GetAllAccountsSorted().Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ComputeEngineService: warmup from DB failed — scorer starts empty");
+        }
+    }
+
+    /// <summary>
     /// Main loop: reads deals and forwards through the compute pipeline.
     /// </summary>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -96,33 +129,7 @@ public sealed class ComputeEngineService : BackgroundService
         _logger.LogInformation("ComputeEngineService active — processing deals");
 
         // Warm up AccountScorer from historical deals in DB so accounts appear on startup
-        if (_dbEnabled)
-        {
-            try
-            {
-                var warmupCount = 0;
-                await foreach (var batch in _dealRepository.GetAllDealsBatchedAsync(ct: stoppingToken).ConfigureAwait(false))
-                {
-                    foreach (var deal in batch)
-                    {
-                        _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId,
-                            deal.Login, deal.Symbol, deal.TimeMsc);
-                        _accountScorer.ProcessDeal(
-                            deal.DealId, deal.Login, deal.Action, deal.Volume, deal.Profit,
-                            deal.Commission, deal.Swap, deal.ExpertId, deal.Reason,
-                            deal.TimeMsc, deal.Symbol, deal.PositionId);
-                        warmupCount++;
-                    }
-                }
-                _logger.LogInformation(
-                    "ComputeEngineService warmup: replayed {Count} historical deals, {Accounts} accounts scored",
-                    warmupCount, _accountScorer.GetAllAccountsSorted().Count);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "ComputeEngineService: warmup from DB failed — scorer starts empty");
-            }
-        }
+        await WarmupFromDatabase(stoppingToken).ConfigureAwait(false);
 
         try
         {

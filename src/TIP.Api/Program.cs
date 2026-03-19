@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using TIP.Api;
+using TIP.Api.Controllers;
 using TIP.Api.Hubs;
 using TIP.Connector;
 using TIP.Core.Configuration;
@@ -179,7 +180,91 @@ try
         sp.GetRequiredService<System.Threading.Channels.ChannelWriter<TickEvent>>(),
         sp.GetRequiredService<SyncStateTracker>(),
         sp.GetRequiredService<TIP.Core.Resilience.CircuitBreaker<List<RawDeal>>>()));
-    builder.Services.AddSingleton<PipelineOrchestrator>();
+    builder.Services.AddSingleton(sp =>
+    {
+        var api = sp.GetRequiredService<IMT5Api>();
+        var connMgr = sp.GetRequiredService<ConnectionManager>();
+        var priceCache = sp.GetRequiredService<PriceCache>();
+        var symbolCache = sp.GetRequiredService<SymbolCache>();
+        var dealRepo = sp.GetRequiredService<DealRepository>();
+
+        return new PipelineOrchestrator(
+            api,
+            sp.GetRequiredService<DealSink>(),
+            sp.GetRequiredService<TickListener>(),
+            sp.GetRequiredService<HistoryFetcher>(),
+            sp.GetRequiredService<SyncStateTracker>(),
+            sp.GetRequiredService<AccountScorer>(),
+            sp.GetRequiredService<CorrelationEngine>(),
+            sp.GetRequiredService<PnLEngine>(),
+            sp.GetRequiredService<ExposureEngine>(),
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger<PipelineOrchestrator>(),
+            onServerSwitch: (serverAddress) =>
+            {
+                priceCache.Clear();
+                AnalyticsController.ClearUserCache();
+                dealRepo.UpdateServerName(serverAddress);
+                sp.GetRequiredService<DealWriterService>().UpdateServerName(serverAddress);
+            },
+            onSymbolReload: () =>
+            {
+                try
+                {
+                    var symbols = api.GetSymbols();
+                    symbolCache.Load(symbols);
+                    Log.Information("SymbolCache reloaded: {Count} symbols from new server", symbolCache.Count);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to reload SymbolCache on server switch");
+                }
+            },
+            onPreLiveWarmup: async (ct) =>
+            {
+                // Reload open positions into PnLEngine
+                try
+                {
+                    var pnlEngine = sp.GetRequiredService<PnLEngine>();
+                    var groupMask = connMgr.CurrentConfig.GroupMask;
+                    var logins = api.GetUserLogins(groupMask);
+                    var positions = new List<OpenPosition>();
+
+                    foreach (var login in logins)
+                    {
+                        try
+                        {
+                            var rawPositions = api.GetPositions(login);
+                            foreach (var rp in rawPositions)
+                            {
+                                positions.Add(new OpenPosition
+                                {
+                                    PositionId = (long)rp.PositionId,
+                                    Login = rp.Login,
+                                    Symbol = rp.Symbol,
+                                    Direction = (int)rp.Action,
+                                    Volume = rp.Volume,
+                                    OpenPrice = rp.PriceOpen,
+                                });
+                            }
+                        }
+                        catch { /* skip logins without positions */ }
+                    }
+
+                    if (positions.Count > 0)
+                        pnlEngine.Initialize(positions);
+
+                    Log.Information("Pre-live warmup: loaded {Count} positions from {Logins} logins",
+                        positions.Count, logins.Length);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Pre-live warmup: failed to load positions");
+                }
+
+                // Replay historical deals through scorer
+                await sp.GetRequiredService<ComputeEngineService>().WarmupFromDatabase(ct).ConfigureAwait(false);
+            });
+    });
     builder.Services.AddHostedService<MT5Connection>();
 
     // Register deal processor (pure logic, no I/O)
@@ -210,7 +295,7 @@ try
         serviceHealthTracker,
         dbEnabled));
 
-    builder.Services.AddHostedService(sp => new DealWriterService(
+    builder.Services.AddSingleton(sp => new DealWriterService(
         sp.GetRequiredService<ILogger<DealWriterService>>(),
         dealWriterChannel.Reader,
         sp.GetRequiredService<DealRepository>(),
@@ -220,6 +305,7 @@ try
         dealBatchSize,
         dealFlushMs,
         connectionConfig.ServerAddress));
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<DealWriterService>());
 
     // Fan-out service: reads main channels, writes to all consumer channels
     builder.Services.AddHostedService(sp => new ChannelFanOutService(
@@ -312,7 +398,7 @@ try
         sp.GetRequiredService<SymbolCache>(),
         serviceHealthTracker));
 
-    builder.Services.AddHostedService(sp => new ComputeEngineService(
+    builder.Services.AddSingleton(sp => new ComputeEngineService(
         sp.GetRequiredService<ILogger<ComputeEngineService>>(),
         computeDealChannel.Reader,
         sp.GetRequiredService<DealProcessor>(),
@@ -326,6 +412,7 @@ try
         sp.GetRequiredService<TIP.Data.DealRepository>(),
         serviceHealthTracker,
         dbEnabled));
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<ComputeEngineService>());
 
     // ── Intelligence Engines (Phase 5) ──────────────────────────────────────
 

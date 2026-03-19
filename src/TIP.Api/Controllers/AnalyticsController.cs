@@ -31,6 +31,12 @@ public sealed class AnalyticsController : ControllerBase
     /// </summary>
     private static readonly ConcurrentDictionary<ulong, (string Name, string Group)> _userCache = new();
 
+    /// <summary>
+    /// Clears the user info cache. Called on server switch so names/groups
+    /// are re-fetched from the new MT5 server.
+    /// </summary>
+    public static void ClearUserCache() => _userCache.Clear();
+
     private readonly AccountScorer _accountScorer;
     private readonly PnLEngine _pnlEngine;
     private readonly ExposureEngine _exposureEngine;

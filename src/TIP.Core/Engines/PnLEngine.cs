@@ -227,6 +227,20 @@ public sealed class PnLEngine
         }
     }
 
+    /// <summary>
+    /// Clears all positions and P&amp;L results. Called on server switch to prevent
+    /// phantom positions from the previous server contaminating the new session.
+    /// </summary>
+    public void Reset()
+    {
+        lock (_positionLock)
+        {
+            _positionsBySymbol.Clear();
+        }
+        _pnlResults.Clear();
+        _logger.LogInformation("PnLEngine reset — cleared all positions and P&L results");
+    }
+
     /// <summary>Gets the number of tracked positions.</summary>
     public int TrackedPositionCount => _pnlResults.Count;
 
