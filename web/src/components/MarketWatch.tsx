@@ -1,10 +1,11 @@
 import { Fragment, useState, useEffect, useMemo, useRef, useCallback } from "react";
-import C, { DEFAULT_WATCHLIST } from "../styles/colors";
+import C, { DEFAULT_WATCHLIST_BASES, resolveWatchlist } from "../styles/colors";
 import type { MarketDataPoint, VolumeData } from "../store/TipStore";
 
 function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
   void _isLive;
-  const [watchlist, setWatchlist] = useState<string[]>(DEFAULT_WATCHLIST);
+  const [watchlist, setWatchlist] = useState<string[]>([]);
+  const watchlistInitialized = useRef(false);
   const [allSymbols, setAllSymbols] = useState<Array<{ symbol: string; description: string }>>([]);
   const [marketData, setMarketData] = useState<Record<string, MarketDataPoint>>({});
   const [addInput, setAddInput] = useState("");
@@ -40,7 +41,15 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     const controller = new AbortController();
     fetch("/api/market/symbols", { signal: controller.signal })
       .then(r => r.ok ? r.json() : [])
-      .then((syms: Array<{ symbol: string; description: string }>) => setAllSymbols(syms))
+      .then((syms: Array<{ symbol: string; description: string }>) => {
+        setAllSymbols(syms);
+        // Resolve default watchlist to match this server's symbol naming convention
+        if (!watchlistInitialized.current && syms.length > 0) {
+          watchlistInitialized.current = true;
+          const resolved = resolveWatchlist(DEFAULT_WATCHLIST_BASES, syms);
+          setWatchlist(resolved);
+        }
+      })
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("[MarketWatch] symbols fetch failed:", err);
