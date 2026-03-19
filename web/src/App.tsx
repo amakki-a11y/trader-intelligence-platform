@@ -72,7 +72,7 @@ interface MoneyOp { id: number; time: string; type: string; amount: number; meth
 interface MarketDataPoint { symbol: string; bid: number; ask: number; spread: number; change24h: number; digits: number }
 interface LiveEvent {
   id: number; time: string; login: number; name: string; symbol: string; action: string;
-  volume: number; score: number; scoreChange: number; isCorrelated: boolean;
+  volume: number; price: number; profit: number; score: number; scoreChange: number; isCorrelated: boolean;
   correlated: number | null; severity: string; entry: string;
 }
 interface VolumeData { buy: number; sell: number; net: number; topBuyer: { login: number; volume: number }; topSeller: { login: number; volume: number } }
@@ -378,6 +378,20 @@ function AccountGrid({ accounts, version, onSelect, flashRows }: {
 function AccountDetail({ account, version, onBack }: { account: Account; version: string; onBack: () => void }) {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [tab, setTab] = useState("history");
+  const [dealSortCol, setDealSortCol] = useState("ticket");
+  const [dealSortDir, setDealSortDir] = useState(-1);
+  const toggleDealSort = (col: string) => {
+    if (dealSortCol === col) setDealSortDir(d => d * -1);
+    else { setDealSortCol(col); setDealSortDir(-1); }
+  };
+  const sortedDeals = useMemo(() => {
+    return [...deals].sort((a, b) => {
+      const av = (a as unknown as Record<string, unknown>)[dealSortCol];
+      const bv = (b as unknown as Record<string, unknown>)[dealSortCol];
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * dealSortDir;
+      return String(av).localeCompare(String(bv)) * dealSortDir;
+    });
+  }, [deals, dealSortCol, dealSortDir]);
   const [acctInfoExpanded, setAcctInfoExpanded] = useState(false);
   const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 90); return d.toISOString().slice(0, 10); });
   const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
@@ -649,12 +663,26 @@ function AccountDetail({ account, version, onBack }: { account: Account; version
         </div>
       )}
       {/* History */}
-      {tab === "history" && (
+      {tab === "history" && (() => {
+        const histCols = [
+          { key: "ticket", label: "Ticket" }, { key: "time", label: "Time" },
+          { key: "entry", label: "Type" }, { key: "symbol", label: "Symbol" },
+          { key: "action", label: "Action" }, { key: "volume", label: "Vol" },
+          { key: "price", label: "Price" }, { key: "profit", label: "Profit" },
+          { key: "commission", label: "Comm" }, { key: "reason", label: "Reason" },
+          { key: "expertId", label: "EA" },
+        ];
+        return (
         <div style={{ overflow: "auto", maxHeight: 340 }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>{["Ticket","Time","Type","Symbol","Action","Vol","Price","Profit","Comm","Reason","EA"].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr></thead>
+            <thead><tr>{histCols.map(h => (
+              <th key={h.key} onClick={() => toggleDealSort(h.key)}
+                style={{ ...thStyle, cursor: "pointer" }}>
+                {h.label} {dealSortCol === h.key ? (dealSortDir === 1 ? "↑" : "↓") : ""}
+              </th>
+            ))}</tr></thead>
             <tbody>
-              {deals.slice(0, 40).map(d => {
+              {sortedDeals.slice(0, 100).map(d => {
                 const entryColor = d.entry === "Open" ? C.blue : d.entry === "Close" || d.entry === "Close By" ? C.amber : d.entry === "Deposit" ? C.green : d.entry === "Withdrawal" ? C.red : d.entry === "Bonus" ? C.purple : C.t3;
                 return (
                 <tr key={d.ticket}>
@@ -673,7 +701,8 @@ function AccountDetail({ account, version, onBack }: { account: Account; version
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
       {/* Deposits */}
       {tab === "deposits" && (
         <div style={{ overflow: "auto", maxHeight: 340 }}>
@@ -874,8 +903,30 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
 }) {
   const [events, setEvents] = useState<LiveEvent[]>([]);
   const [wsStatus, setWsStatus] = useState<"connecting" | "connected" | "disconnected">("disconnected");
+  const [sortCol, setSortCol] = useState<string>("id");
+  const [sortDir, setSortDir] = useState(-1);
+  const [filter, setFilter] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
+  const toggleSort = (col: string) => {
+    if (sortCol === col) setSortDir(d => d * -1);
+    else { setSortCol(col); setSortDir(-1); }
+  };
+
+  const sortedEvents = useMemo(() => {
+    let f = events;
+    if (filter) f = f.filter(ev =>
+      ev.login.toString().includes(filter) || ev.symbol.toLowerCase().includes(filter.toLowerCase()) ||
+      ev.entry.toLowerCase().includes(filter.toLowerCase()) || ev.action.toLowerCase().includes(filter.toLowerCase())
+    );
+    return [...f].sort((a, b) => {
+      const av = (a as unknown as Record<string, unknown>)[sortCol];
+      const bv = (b as unknown as Record<string, unknown>)[sortCol];
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * sortDir;
+      return String(av).localeCompare(String(bv)) * sortDir;
+    });
+  }, [events, sortCol, sortDir, filter]);
 
   // Load recent deals from all accounts on GO LIVE, then listen via WebSocket
   useEffect(() => {
@@ -919,6 +970,8 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
                 symbol: d.symbol ?? "",
                 action: actionMap[d.action] ?? `ACTION_${d.action}`,
                 volume: d.volume ?? 0,
+                price: d.price ?? 0,
+                profit: d.profit ?? 0,
                 score: acc.abuseScore ?? 0, scoreChange: 0,
                 isCorrelated: false, correlated: null,
                 severity: acc.riskLevel === "Critical" ? "CRITICAL" : acc.riskLevel === "High" ? "HIGH" : acc.riskLevel === "Medium" ? "MEDIUM" : "LOW",
@@ -969,6 +1022,8 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
               symbol: d.symbol ?? "",
               action: act,
               volume: d.volume ?? 0,
+              price: d.price ?? 0,
+              profit: d.profit ?? 0,
               score: d.score ?? 0,
               scoreChange: d.scoreChange ?? 0,
               isCorrelated: d.isCorrelated ?? false,
@@ -995,6 +1050,28 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
     };
   }, [isLive]);
+  const lmCols = [
+    { key: "time", label: "Time", w: 65 },
+    { key: "login", label: "Login", w: 70 },
+    { key: "entry", label: "Type", w: 65 },
+    { key: "action", label: "Action", w: 60 },
+    { key: "symbol", label: "Symbol", w: 75 },
+    { key: "volume", label: "Vol / Amount", w: 90 },
+    { key: "price", label: "Price", w: 80 },
+    { key: "profit", label: "Profit", w: 75 },
+    { key: "score", label: "Score", w: 80 },
+  ];
+  const lmTh: CSSProperties = {
+    padding: "8px 6px", textAlign: "left", fontSize: 9,
+    fontFamily: "'JetBrains Mono',monospace", fontWeight: 600, color: C.t3,
+    borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: C.bg2, zIndex: 2,
+    letterSpacing: "0.5px", textTransform: "uppercase", cursor: "pointer",
+  };
+  const lmTd: CSSProperties = {
+    padding: "6px 6px", fontSize: 11, color: C.t2, borderBottom: `1px solid ${C.border}`,
+    fontFamily: "'JetBrains Mono',monospace",
+  };
+
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 12 }}>
@@ -1003,39 +1080,66 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
           {wsStatus === "connected" ? "LIVE — WebSocket connected" : wsStatus === "connecting" ? "Connecting..." : "STOPPED"}
         </span>
         <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: C.t3 }}>{events.length} events captured</span>
+        <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter by login, symbol, type..."
+          style={{ width: 220, background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", color: C.t1, fontSize: 11, fontFamily: "'JetBrains Mono',monospace", outline: "none" }} />
+        <span style={{ fontSize: 11, color: C.t3 }}>{sortedEvents.length} events</span>
       </div>
-      <div ref={logRef} style={{ flex: 1, overflow: "auto", padding: "8px 0" }}>
-        {events.length === 0 && (
+      <div ref={logRef} style={{ flex: 1, overflow: "auto" }}>
+        {events.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60, color: C.t3, fontSize: 13 }}>
             {isLive ? "Waiting for deals..." : "Click GO LIVE to start monitoring"}
           </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <thead><tr>
+              {lmCols.map(col => (
+                <th key={col.key} onClick={() => toggleSort(col.key)}
+                  style={{ ...lmTh, width: col.w }}>
+                  {col.label} {sortCol === col.key ? (sortDir === 1 ? "↑" : "↓") : ""}
+                </th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {sortedEvents.map(ev => {
+                const entryColor = ev.entry === "Open" ? C.blue : ev.entry === "Close" || ev.entry === "Close By" ? C.amber : ev.entry === "Deposit" ? C.green : ev.entry === "Withdrawal" ? C.red : ev.entry === "Bonus" ? C.purple : C.t3;
+                const isMoney = ev.entry === "Deposit" || ev.entry === "Withdrawal" || ev.entry === "Bonus";
+                return (
+                  <tr key={ev.id} onClick={() => { const a = accounts.find(x => x.login === ev.login); if (a) onSelect(a); }}
+                    style={{
+                      cursor: "pointer",
+                      background: ev.isCorrelated ? "rgba(255,82,82,0.06)" : "transparent",
+                      transition: "background 0.15s",
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = ev.isCorrelated ? "rgba(255,82,82,0.06)" : "transparent"; }}>
+                    <td style={{ ...lmTd, fontSize: 10, color: C.t3 }}>{ev.time}</td>
+                    <td style={{ ...lmTd, color: C.t1 }}>{ev.login}</td>
+                    <td style={{ ...lmTd, color: entryColor, fontWeight: 600, fontSize: 10 }}>{ev.entry || "—"}</td>
+                    <td style={{ ...lmTd, color: ev.action === "BUY" ? C.blue : ev.action === "SELL" ? C.red : C.t2 }}>{ev.action}</td>
+                    <td style={lmTd}>{ev.symbol}</td>
+                    <td style={{ ...lmTd, fontWeight: isMoney ? 600 : 400, color: isMoney ? (ev.profit >= 0 ? C.green : C.red) : C.t2 }}>
+                      {isMoney ? `${ev.profit >= 0 ? "+" : ""}${ev.profit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ev.volume}
+                    </td>
+                    <td style={{ ...lmTd, color: C.t3 }}>{!isMoney && ev.price ? ev.price : ""}</td>
+                    <td style={{ ...lmTd, color: !isMoney ? (ev.profit >= 0 ? C.green : C.red) : C.t3 }}>
+                      {!isMoney && ev.profit ? `${ev.profit >= 0 ? "+" : ""}${ev.profit.toFixed(2)}` : ""}
+                    </td>
+                    <td style={lmTd}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        {ev.scoreChange !== 0 && (
+                          <span style={{ fontSize: 9, color: ev.scoreChange > 0 ? C.red : C.green }}>
+                            {ev.scoreChange > 0 ? "▲" : "▼"}{Math.abs(ev.scoreChange).toFixed(1)}
+                          </span>
+                        )}
+                        <ScoreBar score={Math.min(100, ev.score + ev.scoreChange)} width={45} />
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
-        {events.map(ev => (
-          <div key={ev.id} onClick={() => { const a = accounts.find(x => x.login === ev.login); if (a) onSelect(a); }}
-            style={{
-              display: "flex", alignItems: "center", gap: 10, padding: "7px 16px",
-              borderBottom: `1px solid ${C.border}`, cursor: "pointer",
-              background: ev.isCorrelated ? "rgba(255,82,82,0.06)" : "transparent", transition: "background 0.15s",
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
-            onMouseLeave={e => { e.currentTarget.style.background = ev.isCorrelated ? "rgba(255,82,82,0.06)" : "transparent"; }}>
-            <span style={{ fontSize: 10, color: C.t3, fontFamily: "'JetBrains Mono',monospace", width: 60, flexShrink: 0 }}>{ev.time}</span>
-            <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.t1, width: 48, flexShrink: 0 }}>{ev.login}</span>
-            <span style={{ fontSize: 10, fontWeight: 600, flexShrink: 0, width: 58, color: ev.entry === "Open" ? C.blue : ev.entry === "Close" || ev.entry === "Close By" ? C.amber : ev.entry === "Deposit" ? C.green : ev.entry === "Withdrawal" ? C.red : ev.entry === "Bonus" ? C.purple : C.t3 }}>{ev.entry || "—"}</span>
-            <span style={{ fontSize: 11, color: ev.action === "BUY" ? C.blue : ev.action === "SELL" ? C.red : C.t2, width: 55, flexShrink: 0 }}>{ev.action}</span>
-            <span style={{ fontSize: 11, color: C.t2, width: 65, flexShrink: 0 }}>{ev.symbol}</span>
-            <span style={{ fontSize: 11, color: C.t2, width: 35 }}>{ev.volume}</span>
-            <div style={{ flex: 1 }} />
-            {ev.isCorrelated && <Badge color={C.red}>CORRELATED → {ev.correlated}</Badge>}
-            {ev.scoreChange !== 0 && (
-              <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: ev.scoreChange > 0 ? C.red : C.green }}>
-                {ev.scoreChange > 0 ? "▲" : "▼"}{Math.abs(ev.scoreChange)}
-              </span>
-            )}
-            <ScoreBar score={Math.min(100, ev.score + ev.scoreChange)} width={50} />
-          </div>
-        ))}
       </div>
     </div>
   );

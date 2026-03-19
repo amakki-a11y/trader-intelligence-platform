@@ -309,3 +309,11 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 - `dotnet build` — zero warnings, zero errors
 - `npx tsc --noEmit` — zero errors
 - All 163 tests passing
+
+### Phase 6.3b: LiveMonitor + History Table UX — ✅ DONE (2026-03-19)
+- **LiveMonitor table with headers**: Converted from flex layout to proper `<table>` with sortable column headers (Time, Login, Type, Action, Symbol, Vol/Amount, Price, Profit, Score). Click any header to sort ascending/descending.
+- **LiveMonitor filter**: Added search input to filter events by login, symbol, type, or action.
+- **LiveMonitor amounts**: Deposits/withdrawals now show actual amount (e.g., "+10,000.00" in green) instead of volume "0". Trades show volume + price. Profit column for trades with color coding.
+- **AccountDetail history sorting**: Deal history table now sortable by any column (Ticket, Time, Type, Symbol, Action, Vol, Price, Profit, Comm, Reason, EA). Shows up to 100 deals (was 40).
+- **LiveEvent enriched**: Added `price` and `profit` fields to LiveEvent interface for full deal data in the monitor.
+- `npx tsc --noEmit` — zero errors
