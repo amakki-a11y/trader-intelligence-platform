@@ -901,10 +901,13 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
             const data = await res.json();
             if (!Array.isArray(data)) continue;
             for (const d of data) {
-              if (seenIds.has(d.dealId)) continue;
-              seenIds.add(d.dealId);
+              const did = Number(d.dealId);
+              if (!did || seenIds.has(did)) continue;
+              // Only show trade actions (BUY=0, SELL=1), skip BALANCE/BONUS/etc
+              if (d.action !== 0 && d.action !== 1) continue;
+              seenIds.add(did);
               allDeals.push({
-                id: d.dealId,
+                id: did,
                 time: d.time ? new Date(d.time).toLocaleTimeString("en-GB") : "",
                 login: d.login, name: acc.name ?? d.login?.toString() ?? "",
                 symbol: d.symbol ?? "",
@@ -940,23 +943,28 @@ function LiveMonitor({ accounts, isLive, onSelect }: {
           const msg = JSON.parse(evt.data);
           if (msg.type !== "deals" || !msg.data) return;
           const d = msg.data;
-          if (seenIds.has(d.dealId)) return;
-          seenIds.add(d.dealId);
+          const did = Number(d.dealId);
+          if (!did || seenIds.has(did)) return;
+          seenIds.add(did);
           const time = d.timeMsc ? new Date(d.timeMsc).toLocaleTimeString("en-GB") : new Date().toLocaleTimeString("en-GB");
-          setEvents(prev => [{
-            id: d.dealId ?? Date.now() + Math.random(),
-            time,
-            login: d.login,
-            name: d.login?.toString() ?? "",
-            symbol: d.symbol ?? "",
-            action: d.action ?? "",
-            volume: d.volume ?? 0,
-            score: d.score ?? 0,
-            scoreChange: d.scoreChange ?? 0,
-            isCorrelated: d.isCorrelated ?? false,
-            correlated: null,
-            severity: d.severity ?? "Low",
-          }, ...prev].slice(0, 200));
+          setEvents(prev => {
+            // Double-check against React state in case of race with REST load
+            if (prev.some(e => e.id === did)) return prev;
+            return [{
+              id: did,
+              time,
+              login: d.login,
+              name: d.login?.toString() ?? "",
+              symbol: d.symbol ?? "",
+              action: d.action ?? "",
+              volume: d.volume ?? 0,
+              score: d.score ?? 0,
+              scoreChange: d.scoreChange ?? 0,
+              isCorrelated: d.isCorrelated ?? false,
+              correlated: null,
+              severity: d.severity ?? "Low",
+            }, ...prev].slice(0, 200);
+          });
         } catch { /* ignore parse errors */ }
       };
 
