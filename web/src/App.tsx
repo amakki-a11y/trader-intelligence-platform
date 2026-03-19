@@ -1604,6 +1604,8 @@ function SettingsView({ connectionStatus }: { connectionStatus: ConnectionStatus
   const [groupMask, setGroupMask] = useState("*");
   const [showPassword, setShowPassword] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [logs, setLogs] = useState<ConnectionLogEntry[]>([]);
   const [scan, setScan] = useState<ScanSettings>({ historyDays: 90, minDeposit: 0, pollIntervalMs: 5000, criticalThreshold: 70 });
   const [scanSaved, setScanSaved] = useState(false);
@@ -1660,6 +1662,23 @@ function SettingsView({ connectionStatus }: { connectionStatus: ConnectionStatus
     try { await fetch("/api/settings/connection/disconnect", { method: "POST" }); } catch { /* ignore */ }
   }, []);
 
+  const handleSave = useCallback(async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/settings/connection/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ server, login, password, groupMask }),
+      });
+      if (res.ok) { setSaved(true); setPassword(""); setTimeout(() => setSaved(false), 2000); }
+      else {
+        const err = await res.json().catch(() => null) as { error?: string } | null;
+        if (err?.error) alert(err.error);
+      }
+    } catch { /* ignore */ }
+    finally { setSaving(false); }
+  }, [server, login, password, groupMask]);
+
   const handleScanSave = useCallback(async () => {
     try {
       const res = await fetch("/api/settings/scan", {
@@ -1713,14 +1732,8 @@ function SettingsView({ connectionStatus }: { connectionStatus: ConnectionStatus
             <div style={{ fontSize: 11, color: C.red, marginTop: 2 }}>{connectionStatus.error}</div>
           )}
         </div>
-        {connectionStatus.connected ? (
+        {connectionStatus.connected && (
           <button onClick={handleDisconnect} style={btnDanger}>DISCONNECT</button>
-        ) : (
-          <button onClick={handleConnect} disabled={connecting || !server || !login} style={{
-            ...btnPrimary, opacity: connecting || !server || !login ? 0.5 : 1,
-          }}>
-            {connecting ? "CONNECTING..." : password ? "CONNECT" : "RECONNECT"}
-          </button>
         )}
       </div>
 
@@ -1758,6 +1771,16 @@ function SettingsView({ connectionStatus }: { connectionStatus: ConnectionStatus
                 <div style={{ fontSize: 10, color: C.t3, marginTop: 4 }}>
                   Wildcard syntax: * matches any, \ separates groups (e.g. forex\retail\*)
                 </div>
+              </div>
+              <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+                <button onClick={handleSave} disabled={saving || !server || !login || !password}
+                  style={{ ...btnPrimary, background: C.blue, opacity: saving || !server || !login || !password ? 0.5 : 1, flex: 1 }}>
+                  {saving ? "SAVING..." : saved ? "SAVED" : "SAVE CREDENTIALS"}
+                </button>
+                <button onClick={handleConnect} disabled={connecting || !server || !login}
+                  style={{ ...btnPrimary, opacity: connecting || !server || !login ? 0.5 : 1, flex: 1 }}>
+                  {connecting ? "CONNECTING..." : password ? "CONNECT" : "RECONNECT"}
+                </button>
               </div>
             </div>
           </div>

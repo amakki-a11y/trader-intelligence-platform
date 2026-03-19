@@ -126,6 +126,22 @@ public sealed class ConnectionManager
     }
 
     /// <summary>
+    /// Updates the connection configuration without triggering a reconnect.
+    /// Used when the user wants to save credentials for later use.
+    /// </summary>
+    public void UpdateConfig(string server, ulong login, string password, string groupMask)
+    {
+        lock (_lock)
+        {
+            _config = new ConnectionConfig(server, login, password, groupMask);
+            _logger.LogInformation(
+                "Connection config saved (no reconnect): server={Server}, login={Login}, groupMask={GroupMask}",
+                server, login, groupMask);
+            AddLog("info", $"Credentials saved — {server} login {login} mask '{groupMask}'");
+        }
+    }
+
+    /// <summary>
     /// Signals MT5Connection to disconnect (without changing config).
     /// </summary>
     public void SignalDisconnect()

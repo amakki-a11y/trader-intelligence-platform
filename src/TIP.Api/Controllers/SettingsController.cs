@@ -115,6 +115,42 @@ public sealed class SettingsController : ControllerBase
     }
 
     /// <summary>
+    /// Saves MT5 connection credentials without triggering a connection attempt.
+    /// Useful for storing credentials for later use via CONNECT or RECONNECT.
+    /// </summary>
+    [HttpPost("connection/save")]
+    public ActionResult<ConnectionConfigResponse> SaveConfig([FromBody] ConnectionConfigRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Server))
+            return BadRequest(new { error = "Server address is required" });
+
+        if (string.IsNullOrWhiteSpace(request.Login))
+            return BadRequest(new { error = "Manager login is required" });
+
+        if (!ulong.TryParse(request.Login, out var login))
+            return BadRequest(new { error = "Manager login must be a numeric value" });
+
+        if (string.IsNullOrWhiteSpace(request.Password))
+            return BadRequest(new { error = "Password is required when saving credentials" });
+
+        var groupMask = string.IsNullOrWhiteSpace(request.GroupMask) ? "*" : request.GroupMask;
+
+        _connectionManager.UpdateConfig(request.Server, login, request.Password, groupMask);
+
+        _logger.LogInformation(
+            "Credentials saved via API (no connect): server={Server}, login={Login}",
+            request.Server, request.Login);
+
+        return Ok(new ConnectionConfigResponse(
+            Server: request.Server,
+            Login: request.Login,
+            GroupMask: groupMask,
+            Connected: _connectionManager.IsConnected,
+            AccountsInScope: _connectionManager.AccountsInScope,
+            UptimeSeconds: _connectionManager.UptimeSeconds));
+    }
+
+    /// <summary>
     /// Disconnects from the current MT5 server.
     /// </summary>
     [HttpPost("connection/disconnect")]
