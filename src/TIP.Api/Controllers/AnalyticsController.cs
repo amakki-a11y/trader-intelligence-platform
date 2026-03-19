@@ -1,8 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using TIP.Core.Engines;
 using TIP.Core.Models;
+using TIP.Data;
 
 namespace TIP.Api.Controllers;
 
@@ -22,6 +26,9 @@ public sealed class AnalyticsController : ControllerBase
     private readonly PnLEngine _pnlEngine;
     private readonly ExposureEngine _exposureEngine;
     private readonly CorrelationEngine _correlationEngine;
+    private readonly DealProcessor _dealProcessor;
+    private readonly DealRepository _dealRepository;
+    private readonly ILogger<AnalyticsController> _logger;
 
     /// <summary>
     /// Initializes the analytics controller with engine dependencies.
@@ -30,12 +37,18 @@ public sealed class AnalyticsController : ControllerBase
         AccountScorer accountScorer,
         PnLEngine pnlEngine,
         ExposureEngine exposureEngine,
-        CorrelationEngine correlationEngine)
+        CorrelationEngine correlationEngine,
+        DealProcessor dealProcessor,
+        DealRepository dealRepository,
+        ILogger<AnalyticsController> logger)
     {
         _accountScorer = accountScorer;
         _pnlEngine = pnlEngine;
         _exposureEngine = exposureEngine;
         _correlationEngine = correlationEngine;
+        _dealProcessor = dealProcessor;
+        _dealRepository = dealRepository;
+        _logger = logger;
     }
 
     /// <summary>
@@ -260,6 +273,109 @@ public sealed class AnalyticsController : ControllerBase
                 }
             }
         });
+    }
+
+    /// <summary>
+    /// POST /api/accounts/scan — Triggers a full rescan: fetches deals from MT5 for all
+    /// accounts visible to the current manager, writes them to DB, and replays through
+    /// the scoring pipeline. Returns the number of accounts scored.
+    /// </summary>
+    [HttpPost("accounts/scan")]
+    public async Task<IActionResult> ScanAccounts()
+    {
+        var api = HttpContext.RequestServices.GetService<TIP.Connector.IMT5Api>();
+        if (api == null || !api.IsConnected)
+            return BadRequest(new { error = "Not connected to MT5" });
+
+        var connectionConfig = HttpContext.RequestServices.GetRequiredService<TIP.Connector.ConnectionConfig>();
+
+        try
+        {
+            // Step 1: Get all account logins visible to this manager
+            var logins = api.GetUserLogins(connectionConfig.GroupMask);
+            _logger.LogInformation("Scan: found {Count} logins for group mask '{Mask}'",
+                logins.Length, connectionConfig.GroupMask);
+
+            // Step 2: Fetch deals from MT5 for each login and write to DB
+            var fromDate = DateTimeOffset.UtcNow.AddDays(-90);
+            var toDate = DateTimeOffset.UtcNow;
+            var totalDeals = 0;
+
+            foreach (var login in logins)
+            {
+                var rawDeals = api.RequestDeals(login, fromDate, toDate);
+                if (rawDeals.Count == 0) continue;
+
+                var records = rawDeals.Select(d => new DealRecord
+                {
+                    DealId = d.DealId,
+                    Login = d.Login,
+                    TimeMsc = d.TimeMsc,
+                    Symbol = d.Symbol,
+                    Action = (int)d.Action,
+                    Volume = d.VolumeLots,
+                    Price = d.Price,
+                    Profit = d.Profit,
+                    Commission = d.Commission,
+                    Swap = d.Storage,
+                    Fee = d.Fee,
+                    Reason = (int)d.Reason,
+                    ExpertId = d.ExpertId,
+                    Comment = d.Comment,
+                    PositionId = d.PositionId,
+                    Server = connectionConfig.ServerAddress
+                }).ToList();
+
+                foreach (var record in records)
+                {
+                    try
+                    {
+                        await _dealRepository.InsertAsync(record).ConfigureAwait(false);
+                    }
+                    catch (Npgsql.PostgresException ex) when (ex.SqlState == "23505")
+                    {
+                        // Duplicate — ignore
+                    }
+                }
+
+                totalDeals += rawDeals.Count;
+            }
+
+            _logger.LogInformation("Scan: wrote {TotalDeals} deals to DB for {Logins} logins",
+                totalDeals, logins.Length);
+
+            // Step 3: Reset scorer and replay all deals from DB through the scoring pipeline
+            _accountScorer.Reset();
+            var allDeals = await _dealRepository.GetAllDealsAsync().ConfigureAwait(false);
+            var scoredCount = 0;
+
+            foreach (var deal in allDeals)
+            {
+                _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId);
+                _accountScorer.ProcessDeal(
+                    deal.DealId, deal.Login, deal.Action, deal.Volume, deal.Profit,
+                    deal.Commission, deal.Swap, deal.ExpertId, deal.Reason,
+                    deal.TimeMsc, deal.Symbol, deal.PositionId);
+            }
+
+            scoredCount = _accountScorer.GetAllAccountsSorted().Count;
+            _logger.LogInformation("Scan complete: {Deals} deals replayed, {Accounts} accounts scored",
+                allDeals.Count, scoredCount);
+
+            return Ok(new
+            {
+                success = true,
+                loginsScanned = logins.Length,
+                dealsWritten = totalDeals,
+                dealsReplayed = allDeals.Count,
+                accountsScored = scoredCount
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Scan failed");
+            return StatusCode(500, new { error = "Scan failed: " + ex.Message });
+        }
     }
 
     /// <summary>

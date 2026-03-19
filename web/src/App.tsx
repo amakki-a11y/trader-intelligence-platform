@@ -228,8 +228,8 @@ function Sidebar({ view, setView, version, setVersion, connected }: {
 }
 
 // ─── Top Bar ───────────────────────────────────────────────────
-function TopBar({ view, accounts, version, isLive, onToggleLive }: {
-  view: string; accounts: Account[]; version: string; isLive: boolean; onToggleLive: () => void;
+function TopBar({ view, accounts, version, isLive, onToggleLive, onScan, scanning }: {
+  view: string; accounts: Account[]; version: string; isLive: boolean; onToggleLive: () => void; onScan: () => void; scanning: boolean;
 }) {
   const critCount = accounts.filter(a => a.sev === "CRITICAL").length;
   const highCount = accounts.filter(a => a.sev === "HIGH").length;
@@ -262,11 +262,12 @@ function TopBar({ view, accounts, version, isLive, onToggleLive }: {
         </button>
       )}
       {view === "grid" && (
-        <button style={{
+        <button onClick={onScan} disabled={scanning} style={{
           padding: "6px 14px", borderRadius: 6, border: `1px solid ${C.teal}40`,
-          background: C.tealBg, color: C.teal, fontSize: 11, fontWeight: 600,
-          fontFamily: "'JetBrains Mono',monospace", cursor: "pointer",
-        }}>SCAN</button>
+          background: scanning ? C.border : C.tealBg, color: scanning ? C.t3 : C.teal, fontSize: 11, fontWeight: 600,
+          fontFamily: "'JetBrains Mono',monospace", cursor: scanning ? "wait" : "pointer",
+          opacity: scanning ? 0.7 : 1,
+        }}>{scanning ? "SCANNING..." : "SCAN"}</button>
       )}
     </div>
   );
@@ -1720,7 +1721,8 @@ export default function App() {
         const res = await fetch("/api/accounts");
         if (!res.ok) return;
         const data = await res.json();
-        if (!Array.isArray(data) || data.length === 0) return;
+        if (!Array.isArray(data)) return;
+        if (data.length === 0) { setAccounts([]); return; }
         const mapped: Account[] = data.map((a: any) => ({
           login: a.login,
           name: a.name ?? a.login.toString(),
@@ -1761,6 +1763,51 @@ export default function App() {
     setFlashRows(new Set(critLogins));
   }, [accounts]);
 
+  const [scanning, setScanning] = useState(false);
+
+  const handleScan = useCallback(async () => {
+    if (scanning) return;
+    setScanning(true);
+    try {
+      const res = await fetch("/api/accounts/scan", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        console.log("[SCAN]", data);
+        // Immediately re-fetch accounts after scan
+        const accRes = await fetch("/api/accounts");
+        if (accRes.ok) {
+          const accData = await accRes.json();
+          if (Array.isArray(accData) && accData.length > 0) {
+            const mapped: Account[] = accData.map((a: Record<string, unknown>) => ({
+              login: a.login as number,
+              name: (a.name as string) ?? (a.login as number).toString(),
+              group: (a.group as string) ?? "",
+              score: (a.abuseScore as number) ?? 0,
+              sev: a.riskLevel === "Critical" ? "CRITICAL" : a.riskLevel === "High" ? "HIGH" : a.riskLevel === "Medium" ? "MEDIUM" : "LOW",
+              deposits: 0, totalDeposited: (a.totalDeposits as number) ?? 0, bonuses: 0,
+              volume: (a.totalVolume as number) ?? 0, commissions: (a.totalCommission as number) ?? 0,
+              pnl: (a.totalProfit as number) ?? 0, tradeCount: (a.totalTrades as number) ?? 0,
+              expertRatio: (a.expertTradeRatio as number) ?? 0,
+              ib: "", primaryEA: 0, avgHoldSec: 0, winRate: 0, tradesPerHour: 0,
+              timingCV: (a.timingEntropyCV as number) ?? 0,
+              isRingMember: (a.isRingMember as boolean) ?? false, ringPartners: [],
+              bonusToDepRatio: 0, lastActivity: (a.lastScored as string) ?? new Date().toISOString(),
+              threats: { ring: (a.isRingMember as boolean) ? 0.8 : 0, latency: 0, bonus: 0, bot: ((a.expertTradeRatio as number) ?? 0) > 0.5 ? 0.7 : 0 },
+              routing: ((a.abuseScore as number) ?? 0) >= 60 ? "A-Book" : ((a.abuseScore as number) ?? 0) >= 35 ? "Review" : "B-Book",
+            }));
+            setAccounts(mapped.sort((a, b) => b.score - a.score));
+          }
+        }
+      } else {
+        console.error("[SCAN] failed:", await res.text());
+      }
+    } catch (e) {
+      console.error("[SCAN] error:", e);
+    } finally {
+      setScanning(false);
+    }
+  }, [scanning]);
+
   const handleSelect = (acc: Account) => { setSelectedAccount(acc); };
 
   return (
@@ -1780,7 +1827,7 @@ export default function App() {
       `}</style>
       <Sidebar view={view} setView={(v) => { setView(v); setSelectedAccount(null); }} version={version} setVersion={setVersion} connected={connectionStatus.connected} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <TopBar view={view} accounts={accounts} version={version} isLive={isLive} onToggleLive={() => setIsLive(v => !v)} />
+        <TopBar view={view} accounts={accounts} version={version} isLive={isLive} onToggleLive={() => setIsLive(v => !v)} onScan={handleScan} scanning={scanning} />
         {selectedAccount ? (
           <ErrorBoundary name="AccountDetail"><AccountDetail account={selectedAccount} version={version} onBack={() => setSelectedAccount(null)} /></ErrorBoundary>
         ) : (

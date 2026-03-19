@@ -233,6 +233,18 @@ public sealed class AccountScorer
     }
 
     /// <summary>
+    /// Clears all scored accounts and associated tracking data.
+    /// Used before a full rescan to prevent duplicate accumulation.
+    /// </summary>
+    public void Reset()
+    {
+        _accounts.Clear();
+        _tradeTimestamps.Clear();
+        _expertIds.Clear();
+        _expertTradeCount.Clear();
+    }
+
+    /// <summary>
     /// Recalculates derived ratio metrics from raw counters.
     /// </summary>
     private void RecalculateDerivedMetrics(AccountAnalysis account, ulong login)

@@ -205,7 +205,8 @@ try
         serviceHealthTracker,
         dbEnabled,
         dealBatchSize,
-        dealFlushMs));
+        dealFlushMs,
+        connectionConfig.ServerAddress));
 
     // Fan-out service: reads main channels, writes to all consumer channels
     builder.Services.AddHostedService(sp => new ChannelFanOutService(

@@ -284,3 +284,15 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 - 2 new tests: DealRepositoryServerFilterTests (server-filtered + unfiltered queries)
 - `dotnet build` — zero warnings, zero errors
 - All 163 tests passing (161 existing + 2 new)
+
+### Phase 6.2: Full App Walkthrough + SCAN Fix — ✅ DONE (2026-03-18)
+- **DealWriterService serverName fix**: DI registration now passes `connectionConfig.ServerAddress` to DealWriterService. Previously deals were written with empty `server` field, causing warmup to find 0 deals.
+- **Fixed existing deals**: SQL UPDATE to set `server = '89.21.67.56:443'` for 44 deals with empty server column.
+- **SCAN button wired**: Frontend SCAN button now calls `POST /api/accounts/scan`. Shows "SCANNING..." state while running. Immediately refreshes account list after completion.
+- **POST /api/accounts/scan endpoint**: New endpoint in AnalyticsController that: (1) gets all logins from MT5 via GetUserLogins, (2) fetches 90-day deal history per login from MT5, (3) writes deals to DB with ON CONFLICT dedup, (4) resets AccountScorer, (5) replays all deals through scoring pipeline. Returns loginsScanned, dealsWritten, dealsReplayed, accountsScored.
+- **AccountScorer.Reset()**: New method to clear all scored accounts and tracking data before rescan, preventing duplicate accumulation.
+- **Frontend fetchAccounts fix**: No longer returns early on empty array — properly sets accounts to `[]` when API returns no scored accounts.
+- **Chrome walkthrough verified**: Market Watch (12 symbols live), Account Scanner (2 accounts, SCAN works), Account Detail (open trades, history, deposits, AI routing with simulation chart), Live Monitor (WebSocket deal feed), Threat Intelligence (v2 gate), Settings (connected, connection log).
+- `dotnet build` — zero warnings, zero errors
+- `npx tsc --noEmit` — zero errors
+- All 163 tests passing
