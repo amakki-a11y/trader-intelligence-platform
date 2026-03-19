@@ -46,8 +46,8 @@ public class PnLEngineTests
 
         var result = engine.GetPositionPnL(2);
         Assert.IsNotNull(result);
-        // SELL P&L = (openPrice - ask) * volume * contractSize = (1.1050 - 1.1002) * 2.0 * 100000 = 960
-        Assert.AreEqual(960.0, result.UnrealizedPnL);
+        // SELL P&L = (openPrice - bid) * volume * contractSize = (1.1050 - 1.1000) * 2.0 * 100000 = 1000
+        Assert.AreEqual(1000.0, result.UnrealizedPnL);
     }
 
     [TestMethod]
@@ -125,7 +125,7 @@ public class PnLEngineTests
         Assert.AreEqual(400.0, login100Pnl);
 
         var login200Pnl = engine.GetUnrealizedPnLByLogin(200);
-        // EURUSD SELL: (1.1050 - 1.1022) * 1.0 * 100000 = 280
-        Assert.AreEqual(280.0, login200Pnl);
+        // EURUSD SELL: (1.1050 - 1.1020) * 1.0 * 100000 = 300 (uses bid, not ask)
+        Assert.AreEqual(300.0, login200Pnl);
     }
 }

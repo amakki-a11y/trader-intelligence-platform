@@ -22,6 +22,18 @@ namespace TIP.Connector;
 /// </summary>
 public sealed class SyncStateTracker
 {
+    /// <summary>
+    /// Well-known entity type constants to replace magic strings throughout the codebase.
+    /// </summary>
+    public static class EntityType
+    {
+        /// <summary>Checkpoint entity type for per-login deal history sync.</summary>
+        public const string DealLogin = "deal_login";
+
+        /// <summary>Checkpoint entity type for per-symbol tick history sync.</summary>
+        public const string TickSymbol = "tick_symbol";
+    }
+
     private readonly ILogger<SyncStateTracker> _logger;
     private readonly ConcurrentDictionary<(string EntityType, string EntityId), CheckpointEntry> _checkpoints = new();
     private readonly string? _connectionString;

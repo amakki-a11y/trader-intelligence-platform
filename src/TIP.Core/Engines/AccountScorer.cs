@@ -26,11 +26,11 @@ public sealed class AccountScorer
     /// <summary>In-memory cache of all account analyses.</summary>
     private readonly ConcurrentDictionary<ulong, AccountAnalysis> _accounts = new();
 
-    /// <summary>Per-account trade timestamps for timing entropy calculation.</summary>
-    private readonly ConcurrentDictionary<ulong, List<long>> _tradeTimestamps = new();
+    /// <summary>Per-account trade timestamps for timing entropy calculation. Lock bundled with data.</summary>
+    private readonly ConcurrentDictionary<ulong, (object Lock, List<long> Data)> _tradeTimestamps = new();
 
-    /// <summary>Per-account ExpertID set for ratio calculation.</summary>
-    private readonly ConcurrentDictionary<ulong, HashSet<ulong>> _expertIds = new();
+    /// <summary>Per-account ExpertID set for ratio calculation. Lock bundled with data.</summary>
+    private readonly ConcurrentDictionary<ulong, (object Lock, HashSet<ulong> Data)> _expertIds = new();
 
     /// <summary>Per-account expert trade count.</summary>
     private readonly ConcurrentDictionary<ulong, int> _expertTradeCount = new();
@@ -83,15 +83,15 @@ public sealed class AccountScorer
                 account.TotalProfit += profit;
 
                 // Track timestamps for timing entropy
-                var timestamps = _tradeTimestamps.GetOrAdd(login, _ => new List<long>());
-                lock (timestamps) { timestamps.Add(timeMsc); }
+                var tsEntry = _tradeTimestamps.GetOrAdd(login, _ => (new object(), new List<long>()));
+                lock (tsEntry.Lock) { tsEntry.Data.Add(timeMsc); }
 
                 // Track ExpertID
                 if (expertId != 0)
                 {
                     var expertCount = _expertTradeCount.AddOrUpdate(login, 1, (_, c) => c + 1);
-                    var expertSet = _expertIds.GetOrAdd(login, _ => new HashSet<ulong>());
-                    lock (expertSet) { expertSet.Add(expertId); }
+                    var idEntry = _expertIds.GetOrAdd(login, _ => (new object(), new HashSet<ulong>()));
+                    lock (idEntry.Lock) { idEntry.Data.Add(expertId); }
                 }
 
                 // Check correlations
@@ -266,23 +266,23 @@ public sealed class AccountScorer
             account.ExpertTradeRatio = (double)expertCount / account.TotalTrades;
 
         // Unique ExpertIDs
-        if (_expertIds.TryGetValue(login, out var ids))
+        if (_expertIds.TryGetValue(login, out var idEntry))
         {
-            lock (ids) { account.UniqueExpertIds = ids.Count(id => id != 0); }
+            lock (idEntry.Lock) { account.UniqueExpertIds = idEntry.Data.Count(id => id != 0); }
         }
 
         // Timing entropy CV
-        if (_tradeTimestamps.TryGetValue(login, out var timestamps))
+        if (_tradeTimestamps.TryGetValue(login, out var tsEntry2))
         {
-            lock (timestamps) { account.TimingEntropyCV = CalculateTimingEntropy(timestamps); }
+            lock (tsEntry2.Lock) { account.TimingEntropyCV = CalculateTimingEntropy(tsEntry2.Data); }
         }
 
         // Trades per hour
-        if (_tradeTimestamps.TryGetValue(login, out var ts) && ts.Count >= 2)
+        if (_tradeTimestamps.TryGetValue(login, out var tsEntry3) && tsEntry3.Data.Count >= 2)
         {
-            lock (ts)
+            lock (tsEntry3.Lock)
             {
-                var spanMs = ts[^1] - ts[0];
+                var spanMs = tsEntry3.Data[^1] - tsEntry3.Data[0];
                 if (spanMs > 0)
                     account.TradesPerHour = account.TotalTrades / (spanMs / 3600000.0);
             }

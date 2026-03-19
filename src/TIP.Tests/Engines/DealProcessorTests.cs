@@ -17,7 +17,8 @@ public class DealProcessorTests
     {
         var processor = new DealProcessor();
 
-        var result = processor.ProcessDeal(dealId: 1, action: 0, volume: 1.0, positionId: 100);
+        var result = processor.ProcessDeal(dealId: 1, action: 0, volume: 1.0, positionId: 100,
+            login: 1000, symbol: "EURUSD", timeMsc: 1000000);
 
         Assert.AreEqual(DealType.Buy, result.Type);
         Assert.AreEqual(PositionAction.Opened, result.PositionEffect);
@@ -29,7 +30,8 @@ public class DealProcessorTests
     {
         var processor = new DealProcessor();
 
-        var result = processor.ProcessDeal(dealId: 2, action: 1, volume: 2.0, positionId: 200);
+        var result = processor.ProcessDeal(dealId: 2, action: 1, volume: 2.0, positionId: 200,
+            login: 1000, symbol: "EURUSD", timeMsc: 1000000);
 
         Assert.AreEqual(DealType.Sell, result.Type);
         Assert.AreEqual(PositionAction.Opened, result.PositionEffect);
@@ -41,7 +43,8 @@ public class DealProcessorTests
     {
         var processor = new DealProcessor();
 
-        var result = processor.ProcessDeal(dealId: 3, action: 2, volume: 0, positionId: 0);
+        var result = processor.ProcessDeal(dealId: 3, action: 2, volume: 0, positionId: 0,
+            login: 1000, symbol: "", timeMsc: 1000000);
 
         Assert.AreEqual(DealType.Balance, result.Type);
         Assert.AreEqual(PositionAction.None, result.PositionEffect);
@@ -53,7 +56,8 @@ public class DealProcessorTests
     {
         var processor = new DealProcessor();
 
-        var result = processor.ProcessDeal(dealId: 4, action: 6, volume: 0, positionId: 0);
+        var result = processor.ProcessDeal(dealId: 4, action: 6, volume: 0, positionId: 0,
+            login: 1000, symbol: "", timeMsc: 1000000);
 
         Assert.AreEqual(DealType.Bonus, result.Type);
         Assert.AreEqual(PositionAction.None, result.PositionEffect);
@@ -66,10 +70,12 @@ public class DealProcessorTests
         var processor = new DealProcessor();
 
         // Open a position with 1.0 lots
-        processor.ProcessDeal(dealId: 10, action: 0, volume: 1.0, positionId: 500);
+        processor.ProcessDeal(dealId: 10, action: 0, volume: 1.0, positionId: 500,
+            login: 1000, symbol: "EURUSD", timeMsc: 1000000);
 
         // Close the same position with matching volume
-        var result = processor.ProcessDeal(dealId: 11, action: 1, volume: 1.0, positionId: 500);
+        var result = processor.ProcessDeal(dealId: 11, action: 1, volume: 1.0, positionId: 500,
+            login: 1000, symbol: "EURUSD", timeMsc: 1000001);
 
         Assert.AreEqual(DealType.Sell, result.Type);
         Assert.AreEqual(PositionAction.Closed, result.PositionEffect);
@@ -83,10 +89,12 @@ public class DealProcessorTests
         var processor = new DealProcessor();
 
         // Open 2.0 lots
-        processor.ProcessDeal(dealId: 20, action: 0, volume: 2.0, positionId: 600);
+        processor.ProcessDeal(dealId: 20, action: 0, volume: 2.0, positionId: 600,
+            login: 1000, symbol: "EURUSD", timeMsc: 1000000);
 
         // Close only 0.5 lots
-        var result = processor.ProcessDeal(dealId: 21, action: 1, volume: 0.5, positionId: 600);
+        var result = processor.ProcessDeal(dealId: 21, action: 1, volume: 0.5, positionId: 600,
+            login: 1000, symbol: "EURUSD", timeMsc: 1000001);
 
         Assert.AreEqual(DealType.Sell, result.Type);
         Assert.AreEqual(PositionAction.Modified, result.PositionEffect);
@@ -99,7 +107,8 @@ public class DealProcessorTests
     {
         var processor = new DealProcessor();
 
-        var result = processor.ProcessDeal(dealId: 30, action: 99, volume: 0, positionId: 0);
+        var result = processor.ProcessDeal(dealId: 30, action: 99, volume: 0, positionId: 0,
+            login: 1000, symbol: "EURUSD", timeMsc: 1000000);
 
         Assert.AreEqual(DealType.Unknown, result.Type);
         Assert.AreEqual(PositionAction.None, result.PositionEffect);
@@ -110,7 +119,8 @@ public class DealProcessorTests
     {
         var processor = new DealProcessor();
 
-        var result = processor.ProcessDeal(dealId: 40, action: 3, volume: 0, positionId: 0);
+        var result = processor.ProcessDeal(dealId: 40, action: 3, volume: 0, positionId: 0,
+            login: 1000, symbol: "", timeMsc: 1000000);
 
         Assert.AreEqual(DealType.Credit, result.Type);
         Assert.AreEqual(PositionAction.None, result.PositionEffect);
@@ -121,7 +131,8 @@ public class DealProcessorTests
     {
         var processor = new DealProcessor();
 
-        var result = processor.ProcessDeal(dealId: 50, action: 7, volume: 0, positionId: 0);
+        var result = processor.ProcessDeal(dealId: 50, action: 7, volume: 0, positionId: 0,
+            login: 1000, symbol: "", timeMsc: 1000000);
 
         Assert.AreEqual(DealType.Commission, result.Type);
         Assert.AreEqual(PositionAction.None, result.PositionEffect);
@@ -134,14 +145,17 @@ public class DealProcessorTests
 
         Assert.AreEqual(0, processor.OpenPositionCount);
 
-        processor.ProcessDeal(dealId: 1, action: 0, volume: 1.0, positionId: 100);
+        processor.ProcessDeal(dealId: 1, action: 0, volume: 1.0, positionId: 100,
+            login: 1000, symbol: "EURUSD", timeMsc: 1000000);
         Assert.AreEqual(1, processor.OpenPositionCount);
 
-        processor.ProcessDeal(dealId: 2, action: 0, volume: 1.0, positionId: 200);
+        processor.ProcessDeal(dealId: 2, action: 0, volume: 1.0, positionId: 200,
+            login: 1000, symbol: "GBPUSD", timeMsc: 1000001);
         Assert.AreEqual(2, processor.OpenPositionCount);
 
         // Close one
-        processor.ProcessDeal(dealId: 3, action: 1, volume: 1.0, positionId: 100);
+        processor.ProcessDeal(dealId: 3, action: 1, volume: 1.0, positionId: 100,
+            login: 1000, symbol: "EURUSD", timeMsc: 1000002);
         Assert.AreEqual(1, processor.OpenPositionCount);
     }
 }

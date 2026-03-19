@@ -266,4 +266,124 @@ public sealed class DealRepository
             results.Count, filterByServer ? _serverName : "ALL");
         return results;
     }
+
+    /// <summary>
+    /// Streams all deals in batches to cap memory usage regardless of total deal count.
+    /// Used for warmup and scan replay instead of GetAllDealsAsync.
+    /// </summary>
+    public async IAsyncEnumerable<List<DealRecord>> GetAllDealsBatchedAsync(
+        int batchSize = 10_000,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var filterByServer = !string.IsNullOrEmpty(_serverName);
+
+        var sql = "SELECT deal_id, login, time, time_msc, symbol, action, volume, price, " +
+                  "profit, commission, swap, fee, reason, expert_id, comment, position_id, entry, server " +
+                  "FROM deals" +
+                  (filterByServer ? " WHERE server = @server" : "") +
+                  " ORDER BY time ASC";
+
+        await using var conn = await _dbFactory.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+
+        if (filterByServer)
+            cmd.Parameters.AddWithValue("server", _serverName);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        var batch = new List<DealRecord>(batchSize);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            batch.Add(new DealRecord
+            {
+                DealId = (ulong)reader.GetInt64(0),
+                Login = (ulong)reader.GetInt64(1),
+                TimeMsc = reader.GetInt64(3),
+                Symbol = reader.GetString(4),
+                Action = reader.GetInt16(5),
+                Volume = reader.GetDouble(6),
+                Price = reader.GetDouble(7),
+                Profit = reader.GetDouble(8),
+                Commission = reader.GetDouble(9),
+                Swap = reader.GetDouble(10),
+                Fee = reader.GetDouble(11),
+                Reason = reader.GetInt16(12),
+                ExpertId = (ulong)reader.GetInt64(13),
+                Comment = reader.GetString(14),
+                PositionId = (ulong)reader.GetInt64(15),
+                Entry = reader.GetInt16(16),
+                Server = reader.GetString(17)
+            });
+
+            if (batch.Count >= batchSize)
+            {
+                yield return batch;
+                batch = new List<DealRecord>(batchSize);
+            }
+        }
+
+        if (batch.Count > 0)
+            yield return batch;
+    }
+
+    /// <summary>
+    /// Writes a batch of deals and updates the sync checkpoint in a single transaction.
+    /// Prevents checkpoint from advancing if the deal write fails.
+    /// </summary>
+    public async Task WriteBatchWithCheckpointAsync(
+        IEnumerable<DealRecord> deals,
+        string entityType,
+        string entityId,
+        long checkpointTimestampMs,
+        CancellationToken ct = default)
+    {
+        await using var conn = await _dbFactory.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            foreach (var deal in deals)
+            {
+                await using var cmd = new NpgsqlCommand(InsertSql, conn, tx);
+                cmd.Parameters.AddWithValue("deal_id", (long)deal.DealId);
+                cmd.Parameters.AddWithValue("login", (long)deal.Login);
+                cmd.Parameters.AddWithValue("time", DateTimeOffset.FromUnixTimeMilliseconds(deal.TimeMsc));
+                cmd.Parameters.AddWithValue("time_msc", deal.TimeMsc);
+                cmd.Parameters.AddWithValue("symbol", deal.Symbol);
+                cmd.Parameters.AddWithValue("action", (short)deal.Action);
+                cmd.Parameters.AddWithValue("volume", deal.Volume);
+                cmd.Parameters.AddWithValue("price", deal.Price);
+                cmd.Parameters.AddWithValue("profit", deal.Profit);
+                cmd.Parameters.AddWithValue("commission", deal.Commission);
+                cmd.Parameters.AddWithValue("swap", deal.Swap);
+                cmd.Parameters.AddWithValue("fee", deal.Fee);
+                cmd.Parameters.AddWithValue("reason", (short)deal.Reason);
+                cmd.Parameters.AddWithValue("expert_id", (long)deal.ExpertId);
+                cmd.Parameters.AddWithValue("comment", deal.Comment);
+                cmd.Parameters.AddWithValue("position_id", (long)deal.PositionId);
+                cmd.Parameters.AddWithValue("entry", (short)deal.Entry);
+                cmd.Parameters.AddWithValue("server", deal.Server);
+                await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+
+            // Update checkpoint in the same transaction
+            await using var cpCmd = new NpgsqlCommand(
+                "INSERT INTO sync_state (entity_type, entity_id, last_sync_time, last_sync_msc) " +
+                "VALUES (@entity_type, @entity_id, @sync_time, @sync_msc) " +
+                "ON CONFLICT (entity_type, entity_id) DO UPDATE SET " +
+                "last_sync_time = EXCLUDED.last_sync_time, last_sync_msc = EXCLUDED.last_sync_msc",
+                conn, tx);
+            cpCmd.Parameters.AddWithValue("entity_type", entityType);
+            cpCmd.Parameters.AddWithValue("entity_id", entityId);
+            cpCmd.Parameters.AddWithValue("sync_time", DateTimeOffset.FromUnixTimeMilliseconds(checkpointTimestampMs));
+            cpCmd.Parameters.AddWithValue("sync_msc", checkpointTimestampMs);
+            await cpCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+
+            await tx.CommitAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct).ConfigureAwait(false);
+            throw;
+        }
+    }
 }

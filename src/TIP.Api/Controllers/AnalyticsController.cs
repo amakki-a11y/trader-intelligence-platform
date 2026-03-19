@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging;
 using TIP.Core.Engines;
 using TIP.Core.Models;
@@ -17,11 +19,18 @@ namespace TIP.Api.Controllers;
 /// - All data served from in-memory engine state — no DB queries on read path.
 /// - Lightweight DTOs returned directly (no AutoMapper overhead).
 /// - Endpoints designed for dashboard polling until WebSocket push is implemented (Phase 4).
+/// - FIX 6: GetUser results are cached in a static ConcurrentDictionary to avoid repeated MT5 API calls.
 /// </summary>
 [ApiController]
 [Route("api")]
 public sealed class AnalyticsController : ControllerBase
 {
+    /// <summary>
+    /// In-memory cache for MT5 GetUser results to avoid expensive repeated API calls.
+    /// Key: login, Value: (Name, Group). Cleared on scan.
+    /// </summary>
+    private static readonly ConcurrentDictionary<ulong, (string Name, string Group)> _userCache = new();
+
     private readonly AccountScorer _accountScorer;
     private readonly PnLEngine _pnlEngine;
     private readonly ExposureEngine _exposureEngine;
@@ -282,6 +291,7 @@ public sealed class AnalyticsController : ControllerBase
     /// the scoring pipeline. Returns the number of accounts scored.
     /// </summary>
     [HttpPost("accounts/scan")]
+    [EnableRateLimiting("scan")]
     public async Task<IActionResult> ScanAccounts()
     {
         var api = HttpContext.RequestServices.GetService<TIP.Connector.IMT5Api>();
@@ -292,6 +302,9 @@ public sealed class AnalyticsController : ControllerBase
 
         try
         {
+            // Clear user cache before rescan to pick up any name/group changes
+            _userCache.Clear();
+
             // Step 1: Get all account logins visible to this manager
             var logins = api.GetUserLogins(connectionConfig.GroupMask);
             _logger.LogInformation("Scan: found {Count} logins for group mask '{Mask}'",
@@ -353,7 +366,8 @@ public sealed class AnalyticsController : ControllerBase
 
             foreach (var deal in allDeals)
             {
-                _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId);
+                _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId,
+                    deal.Login, deal.Symbol, deal.TimeMsc);
                 _accountScorer.ProcessDeal(
                     deal.DealId, deal.Login, deal.Action, deal.Volume, deal.Profit,
                     deal.Commission, deal.Swap, deal.ExpertId, deal.Reason,
@@ -382,6 +396,7 @@ public sealed class AnalyticsController : ControllerBase
 
     /// <summary>
     /// Enriches account name/group from MT5 API if not already set.
+    /// FIX 6: Uses static ConcurrentDictionary cache to avoid repeated GetUser calls.
     /// </summary>
     private static void EnrichNames(System.Collections.Generic.IReadOnlyList<AccountAnalysis> accounts, TIP.Connector.IMT5Api? api)
     {
@@ -389,10 +404,19 @@ public sealed class AnalyticsController : ControllerBase
         foreach (var a in accounts)
         {
             if (!string.IsNullOrEmpty(a.Name)) continue;
+
+            if (_userCache.TryGetValue(a.Login, out var cached))
+            {
+                a.Name = cached.Name;
+                a.Group = cached.Group;
+                continue;
+            }
+
             var user = api.GetUser(a.Login);
             if (user == null) continue;
             a.Name = user.Name;
             a.Group = user.Group;
+            _userCache.TryAdd(a.Login, (user.Name, user.Group));
         }
     }
 

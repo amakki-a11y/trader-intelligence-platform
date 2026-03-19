@@ -240,7 +240,14 @@ public sealed class ConnectionManager
     /// Whether a disconnect (without reconnect) was requested by the user.
     /// Reset after MT5Connection reads it.
     /// </summary>
-    public bool DisconnectRequested { get; set; }
+    private volatile bool _disconnectRequested;
+
+    /// <summary>Whether a user-initiated disconnect has been requested.</summary>
+    public bool DisconnectRequested
+    {
+        get => _disconnectRequested;
+        set => _disconnectRequested = value;
+    }
 
     private void SignalReconnect()
     {

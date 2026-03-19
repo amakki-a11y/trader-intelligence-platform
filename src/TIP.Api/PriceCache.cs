@@ -89,6 +89,34 @@ public sealed class PriceCache
     /// Returns the number of symbols currently in the cache.
     /// </summary>
     public int Count => _prices.Count;
+
+    /// <summary>
+    /// Resets the session for a single symbol — current price becomes the new session open.
+    /// </summary>
+    public void ResetSession(string symbol)
+    {
+        if (_prices.TryGetValue(symbol, out var cached))
+        {
+            _prices[symbol] = cached with
+            {
+                SessionOpenBid = cached.Bid,
+                Change = 0,
+                ChangePercent = 0,
+                PreviousBid = cached.Bid,
+                SessionStartMsc = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            };
+        }
+    }
+
+    /// <summary>
+    /// Resets all sessions — each symbol's current price becomes its new session open.
+    /// Call daily at forex session open (e.g. 00:00 UTC).
+    /// </summary>
+    public void ResetAllSessions()
+    {
+        foreach (var symbol in _prices.Keys)
+            ResetSession(symbol);
+    }
 }
 
 /// <summary>

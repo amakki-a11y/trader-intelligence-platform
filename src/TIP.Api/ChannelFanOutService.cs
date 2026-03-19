@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -16,6 +17,7 @@ namespace TIP.Api;
 /// - Multiple consumers (DB writers + compute engines) need independent copies of every event.
 /// - Channel&lt;T&gt; with multiple readers is a race (each reader gets a different event),
 ///   so we fan out explicitly: one reader on the main channel, N writers to consumer channels.
+/// - Bounded channels may drop items; drops are counted and logged once per minute.
 /// </summary>
 public sealed class ChannelFanOutService : BackgroundService
 {
@@ -24,6 +26,8 @@ public sealed class ChannelFanOutService : BackgroundService
     private readonly ChannelWriter<DealEvent>[] _dealTargets;
     private readonly ChannelReader<TickEvent> _tickSource;
     private readonly ChannelWriter<TickEvent>[] _tickTargets;
+    private readonly ConcurrentDictionary<string, long> _dropCounters = new();
+    private DateTime _lastDropWarning = DateTime.MinValue;
 
     /// <summary>
     /// Initializes the fan-out service.
@@ -67,9 +71,9 @@ public sealed class ChannelFanOutService : BackgroundService
         {
             await foreach (var deal in _dealSource.ReadAllAsync(ct).ConfigureAwait(false))
             {
-                foreach (var target in _dealTargets)
+                for (var i = 0; i < _dealTargets.Length; i++)
                 {
-                    target.TryWrite(deal);
+                    TryWriteWithLogging(_dealTargets[i], deal, $"deal-target-{i}");
                 }
             }
         }
@@ -88,9 +92,9 @@ public sealed class ChannelFanOutService : BackgroundService
         {
             await foreach (var tick in _tickSource.ReadAllAsync(ct).ConfigureAwait(false))
             {
-                foreach (var target in _tickTargets)
+                for (var i = 0; i < _tickTargets.Length; i++)
                 {
-                    target.TryWrite(tick);
+                    TryWriteWithLogging(_tickTargets[i], tick, $"tick-target-{i}");
                 }
             }
         }
@@ -99,4 +103,24 @@ public sealed class ChannelFanOutService : BackgroundService
             // Expected during shutdown
         }
     }
+
+    /// <summary>
+    /// Writes to a channel, logging drops with rate limiting (once per minute).
+    /// </summary>
+    private void TryWriteWithLogging<T>(ChannelWriter<T> writer, T item, string channelName)
+    {
+        if (!writer.TryWrite(item))
+        {
+            var count = _dropCounters.AddOrUpdate(channelName, 1, (_, c) => c + 1);
+            if ((DateTime.UtcNow - _lastDropWarning).TotalSeconds >= 60)
+            {
+                _logger.LogWarning("Channel '{Name}' is full — {Count} items dropped total", channelName, count);
+                _lastDropWarning = DateTime.UtcNow;
+            }
+        }
+    }
+
+    /// <summary>Gets drop counters for health endpoint reporting.</summary>
+    public IReadOnlyDictionary<string, long> GetDropCounters() =>
+        new Dictionary<string, long>(_dropCounters);
 }

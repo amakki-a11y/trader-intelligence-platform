@@ -35,7 +35,7 @@ public sealed class DealWriterService : BackgroundService
     private readonly int _batchSize;
     private readonly int _flushIntervalMs;
     private readonly string _serverName;
-    private readonly List<DealRecord> _buffer;
+    private List<DealRecord> _buffer;
     private readonly object _bufferLock = new();
     private readonly CircuitBreaker<int> _dbCircuit;
     private readonly ServiceHealthTracker _healthTracker;
@@ -186,8 +186,8 @@ public sealed class DealWriterService : BackgroundService
             if (_buffer.Count == 0)
                 return;
 
-            batch = new List<DealRecord>(_buffer);
-            _buffer.Clear();
+            batch = _buffer;
+            _buffer = new List<DealRecord>(batch.Capacity);
         }
 
         try

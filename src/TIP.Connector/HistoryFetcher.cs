@@ -93,27 +93,37 @@ public sealed class HistoryFetcher : IDisposable
             try
             {
                 // Check sync state for last checkpoint; default to 90 days back
-                var lastSync = _syncTracker.GetLastSyncTimestamp("deal_login", login.ToString());
+                var lastSync = _syncTracker.GetLastSyncTimestamp(SyncStateTracker.EntityType.DealLogin, login.ToString());
                 var from = lastSync ?? cutoffTime.AddDays(-90);
                 var to = cutoffTime;
 
                 IReadOnlyList<RawDeal> rawDeals;
-                if (_mt5HistoryCircuit != null)
+                try
                 {
-                    try
+                    if (_mt5HistoryCircuit != null)
                     {
-                        rawDeals = await _mt5HistoryCircuit.ExecuteAsync(() =>
-                            Task.FromResult(_api.RequestDeals(login, from, to))).ConfigureAwait(false);
+                        try
+                        {
+                            rawDeals = await _mt5HistoryCircuit.ExecuteAsync(async () =>
+                                await WithTimeout(() => _api.RequestDeals(login, from, to),
+                                    $"DealRequest({login})").ConfigureAwait(false)).ConfigureAwait(false);
+                        }
+                        catch (CircuitBreakerOpenException)
+                        {
+                            _logger.LogWarning("MT5 history circuit open — skipping backfill for login {Login}", login);
+                            continue;
+                        }
                     }
-                    catch (CircuitBreakerOpenException)
+                    else
                     {
-                        _logger.LogWarning("MT5 history circuit open — skipping backfill for login {Login}", login);
-                        continue;
+                        rawDeals = await WithTimeout(() => _api.RequestDeals(login, from, to),
+                            $"DealRequest({login})").ConfigureAwait(false);
                     }
                 }
-                else
+                catch (TimeoutException)
                 {
-                    rawDeals = _api.RequestDeals(login, from, to);
+                    _logger.LogWarning("MT5 DealRequest timed out for login {Login} — skipping", login);
+                    continue;
                 }
 
                 foreach (var raw in rawDeals)
@@ -144,7 +154,7 @@ public sealed class HistoryFetcher : IDisposable
 
                 if (rawDeals.Count > 0)
                 {
-                    _syncTracker.UpdateCheckpoint("deal_login", login.ToString(), to);
+                    _syncTracker.UpdateCheckpoint(SyncStateTracker.EntityType.DealLogin, login.ToString(), to);
                 }
 
                 _logger.LogDebug(
@@ -185,7 +195,7 @@ public sealed class HistoryFetcher : IDisposable
             await _concurrencyLimiter.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                var lastSync = _syncTracker.GetLastSyncTimestamp("tick_symbol", symbol);
+                var lastSync = _syncTracker.GetLastSyncTimestamp(SyncStateTracker.EntityType.TickSymbol, symbol);
                 var from = lastSync ?? cutoffTime;
                 var to = DateTimeOffset.UtcNow;
 
@@ -205,7 +215,7 @@ public sealed class HistoryFetcher : IDisposable
 
                 if (rawTicks.Count > 0)
                 {
-                    _syncTracker.UpdateCheckpoint("tick_symbol", symbol, to);
+                    _syncTracker.UpdateCheckpoint(SyncStateTracker.EntityType.TickSymbol, symbol, to);
                 }
 
                 _logger.LogDebug(
@@ -220,6 +230,23 @@ public sealed class HistoryFetcher : IDisposable
         }
 
         _logger.LogInformation("Tick backfill complete for {SymbolCount} symbols", symbols.Count);
+    }
+
+    /// <summary>
+    /// Wraps a synchronous MT5 API call with a timeout to prevent blocking indefinitely.
+    /// </summary>
+    private async Task<T> WithTimeout<T>(Func<T> mt5Call, string operationName,
+        TimeSpan? timeout = null)
+    {
+        timeout ??= TimeSpan.FromSeconds(30);
+        var task = Task.Run(mt5Call);
+        if (await Task.WhenAny(task, Task.Delay(timeout.Value)).ConfigureAwait(false) != task)
+        {
+            _logger.LogError("MT5 call '{Operation}' timed out after {Seconds}s",
+                operationName, timeout.Value.TotalSeconds);
+            throw new TimeoutException($"MT5 {operationName} timed out after {timeout.Value.TotalSeconds}s");
+        }
+        return await task.ConfigureAwait(false);
     }
 
     /// <summary>

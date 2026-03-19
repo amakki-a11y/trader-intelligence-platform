@@ -45,11 +45,12 @@ public sealed class OpenPosition
 ///
 /// P&amp;L formula:
 ///   BUY:  (currentBid - openPrice) * volume * contractSize
-///   SELL: (openPrice - currentAsk) * volume * contractSize
+///   SELL: (openPrice - currentBid) * volume * contractSize
 /// </summary>
 public sealed class PnLEngine
 {
     private readonly ILogger<PnLEngine> _logger;
+    private readonly Func<string, double>? _getContractSize;
 
     /// <summary>Positions indexed by symbol for fast tick-driven lookup.</summary>
     private readonly ConcurrentDictionary<string, List<OpenPosition>> _positionsBySymbol = new();
@@ -64,9 +65,12 @@ public sealed class PnLEngine
     /// Initializes the P&amp;L engine.
     /// </summary>
     /// <param name="logger">Logger for P&amp;L calculation events.</param>
-    public PnLEngine(ILogger<PnLEngine> logger)
+    /// <param name="getContractSize">Optional delegate to look up contract size from SymbolCache.
+    /// Falls back to heuristic if null.</param>
+    public PnLEngine(ILogger<PnLEngine> logger, Func<string, double>? getContractSize = null)
     {
         _logger = logger;
+        _getContractSize = getContractSize;
     }
 
     /// <summary>
@@ -104,35 +108,38 @@ public sealed class PnLEngine
     /// <param name="ask">Current ask price.</param>
     public void OnTick(string symbol, double bid, double ask)
     {
-        if (!_positionsBySymbol.TryGetValue(symbol, out var positions))
-            return;
-
         var contractSize = GetContractSize(symbol);
         var now = DateTimeOffset.UtcNow;
 
+        // Take a snapshot under lock to avoid concurrent modification from OnPositionClosed/Initialize
+        List<OpenPosition> snapshot;
         lock (_positionLock)
         {
-            foreach (var pos in positions)
-            {
-                var currentPrice = pos.Direction == 0 ? bid : ask;
-                var pnl = pos.Direction == 0
-                    ? (bid - pos.OpenPrice) * pos.Volume * contractSize
-                    : (pos.OpenPrice - ask) * pos.Volume * contractSize;
+            if (!_positionsBySymbol.TryGetValue(symbol, out var list))
+                return;
+            snapshot = list.ToList();
+        }
 
-                _pnlResults[pos.PositionId] = new PnLResult
-                {
-                    PositionId = pos.PositionId,
-                    Login = pos.Login,
-                    Symbol = pos.Symbol,
-                    Direction = pos.Direction,
-                    Volume = pos.Volume,
-                    OpenPrice = pos.OpenPrice,
-                    CurrentPrice = currentPrice,
-                    UnrealizedPnL = Math.Round(pnl, 2),
-                    Swap = pos.Swap,
-                    CalculatedAt = now
-                };
-            }
+        foreach (var pos in snapshot)
+        {
+            var currentPrice = bid;
+            var pnl = pos.Direction == 0
+                ? (bid - pos.OpenPrice) * pos.Volume * contractSize
+                : (pos.OpenPrice - bid) * pos.Volume * contractSize;
+
+            _pnlResults[pos.PositionId] = new PnLResult
+            {
+                PositionId = pos.PositionId,
+                Login = pos.Login,
+                Symbol = pos.Symbol,
+                Direction = pos.Direction,
+                Volume = pos.Volume,
+                OpenPrice = pos.OpenPrice,
+                CurrentPrice = currentPrice,
+                UnrealizedPnL = Math.Round(pnl, 2),
+                Swap = pos.Swap,
+                CalculatedAt = now
+            };
         }
     }
 
@@ -227,16 +234,23 @@ public sealed class PnLEngine
     public double TotalUnrealizedPnL => _pnlResults.Values.Sum(r => r.UnrealizedPnL);
 
     /// <summary>
-    /// Simplified contract size lookup. Full symbol specs will be wired in Phase 6.
+    /// Returns contract size for a symbol. Uses SymbolCache delegate if available,
+    /// otherwise falls back to heuristic.
     /// </summary>
-    private static double GetContractSize(string symbol) => symbol switch
+    private double GetContractSize(string symbol)
     {
-        var s when s.Contains("XAU") => 100,
-        var s when s.Contains("XAG") => 5000,
-        var s when s.Contains("BTC") => 1,
-        var s when s.Contains("ETH") => 1,
-        _ => 100000
-    };
+        if (_getContractSize != null)
+            return _getContractSize(symbol);
+
+        return symbol switch
+        {
+            var s when s.Contains("XAU") => 100,
+            var s when s.Contains("XAG") => 5000,
+            var s when s.Contains("BTC") => 1,
+            var s when s.Contains("ETH") => 1,
+            _ => 100000
+        };
+    }
 }
 
 /// <summary>

@@ -17,6 +17,8 @@ namespace TIP.Core.Engines;
 public sealed class DealProcessor
 {
     private readonly ConcurrentDictionary<ulong, PositionState> _openPositions = new();
+    private readonly ConcurrentDictionary<ulong, object> _positionLocks = new();
+    private readonly ConcurrentDictionary<ulong, long> _lastDealTimestamps = new();
     private readonly ILogger<DealProcessor>? _logger;
 
     /// <summary>
@@ -42,7 +44,7 @@ public sealed class DealProcessor
     /// <param name="timeMsc">Deal time in milliseconds since epoch (0 = invalid).</param>
     /// <returns>Classification result with deal type and position effect.</returns>
     public DealProcessingResult ProcessDeal(ulong dealId, int action, double volume, ulong positionId,
-        ulong login = 1, string? symbol = "X", long timeMsc = 1)
+        ulong login, string? symbol, long timeMsc)
     {
         // Validate required fields
         if (login == 0)
@@ -85,6 +87,21 @@ public sealed class DealProcessor
 
         if (dealType == DealType.Buy || dealType == DealType.Sell)
         {
+            // Check for out-of-order deal delivery
+            if (_lastDealTimestamps.TryGetValue(positionId, out var lastMsc) && timeMsc < lastMsc)
+            {
+                _logger?.LogWarning("Out-of-order deal {DealId} for position {PositionId}: " +
+                    "timeMsc {TimeMsc} < last {LastMsc}. Skipping.", dealId, positionId, timeMsc, lastMsc);
+                return new DealProcessingResult
+                {
+                    DealId = dealId,
+                    Type = dealType,
+                    PositionEffect = PositionAction.Invalid,
+                    AffectedPositionId = positionId
+                };
+            }
+            _lastDealTimestamps[positionId] = timeMsc;
+
             return ProcessTradeDeal(dealId, dealType, volume, positionId);
         }
 
@@ -117,45 +134,50 @@ public sealed class DealProcessor
     /// </summary>
     private DealProcessingResult ProcessTradeDeal(ulong dealId, DealType dealType, double volume, ulong positionId)
     {
-        if (_openPositions.TryGetValue(positionId, out var existing))
+        var posLock = _positionLocks.GetOrAdd(positionId, _ => new object());
+        lock (posLock)
         {
-            // Position exists — this is a close or partial close
-            var remainingVolume = existing.Volume - volume;
-
-            if (remainingVolume <= 0.0001) // Effectively zero (floating point tolerance)
+            if (_openPositions.TryGetValue(positionId, out var existing))
             {
-                _openPositions.TryRemove(positionId, out _);
-                return new DealProcessingResult
+                // Position exists — this is a close or partial close
+                var remainingVolume = existing.Volume - volume;
+
+                if (remainingVolume <= 0.0001) // Effectively zero (floating point tolerance)
                 {
-                    DealId = dealId,
-                    Type = dealType,
-                    PositionEffect = PositionAction.Closed,
-                    AffectedPositionId = positionId
-                };
+                    _openPositions.TryRemove(positionId, out _);
+                    _positionLocks.TryRemove(positionId, out _);
+                    return new DealProcessingResult
+                    {
+                        DealId = dealId,
+                        Type = dealType,
+                        PositionEffect = PositionAction.Closed,
+                        AffectedPositionId = positionId
+                    };
+                }
+                else
+                {
+                    _openPositions[positionId] = existing with { Volume = remainingVolume };
+                    return new DealProcessingResult
+                    {
+                        DealId = dealId,
+                        Type = dealType,
+                        PositionEffect = PositionAction.Modified,
+                        AffectedPositionId = positionId
+                    };
+                }
             }
             else
             {
-                _openPositions[positionId] = existing with { Volume = remainingVolume };
+                // New position
+                _openPositions[positionId] = new PositionState(positionId, volume);
                 return new DealProcessingResult
                 {
                     DealId = dealId,
                     Type = dealType,
-                    PositionEffect = PositionAction.Modified,
+                    PositionEffect = PositionAction.Opened,
                     AffectedPositionId = positionId
                 };
             }
-        }
-        else
-        {
-            // New position
-            _openPositions[positionId] = new PositionState(positionId, volume);
-            return new DealProcessingResult
-            {
-                DealId = dealId,
-                Type = dealType,
-                PositionEffect = PositionAction.Opened,
-                AffectedPositionId = positionId
-            };
         }
     }
 

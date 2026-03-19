@@ -53,6 +53,10 @@ public sealed class SymbolCache
     /// <summary>Returns digits for a symbol (default 5 if unknown).</summary>
     public int GetDigits(string symbol) =>
         _symbols.TryGetValue(symbol, out var s) ? s.Digits : 5;
+
+    /// <summary>Returns contract size for a symbol (default 100000 for FX if unknown).</summary>
+    public double GetContractSize(string symbol) =>
+        _symbols.TryGetValue(symbol, out var s) ? s.ContractSize : 100000;
 }
 
 /// <summary>Immutable MT5 symbol metadata record.</summary>

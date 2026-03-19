@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Channels;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -9,9 +11,11 @@ using Serilog;
 using Serilog.Events;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using TIP.Api;
 using TIP.Api.Hubs;
 using TIP.Connector;
+using TIP.Core.Configuration;
 using TIP.Core.Engines;
 using TIP.Data;
 
@@ -40,42 +44,51 @@ try
     // Ensure user secrets are loaded (overrides appsettings.json placeholders)
     builder.Configuration.AddUserSecrets(typeof(DealerHub).Assembly, optional: true);
 
+    // ── Scoring Configuration ─────────────────────────────────────────────────
+    builder.Services.Configure<ScoringConfig>(builder.Configuration.GetSection("Scoring"));
+
     // ── Channel<T> Pipelines ──────────────────────────────────────────────────
 
-    // Main ingest channels — DealSink and TickListener write here, fan-out service reads
-    var dealChannel = Channel.CreateUnbounded<DealEvent>(new UnboundedChannelOptions
+    // Main ingest channels — bounded to prevent OOM under load
+    var dealChannel = Channel.CreateBounded<DealEvent>(new BoundedChannelOptions(10_000)
     {
+        FullMode = BoundedChannelFullMode.DropOldest,
         SingleReader = true,
         SingleWriter = false
     });
 
-    var tickChannel = Channel.CreateUnbounded<TickEvent>(new UnboundedChannelOptions
+    var tickChannel = Channel.CreateBounded<TickEvent>(new BoundedChannelOptions(100_000)
     {
+        FullMode = BoundedChannelFullMode.DropOldest,
         SingleReader = true,
         SingleWriter = false
     });
 
-    // Fan-out consumer channels
-    var dealWriterChannel = Channel.CreateUnbounded<DealEvent>(new UnboundedChannelOptions
+    // Fan-out consumer channels — bounded
+    var dealWriterChannel = Channel.CreateBounded<DealEvent>(new BoundedChannelOptions(10_000)
     {
+        FullMode = BoundedChannelFullMode.DropOldest,
         SingleReader = true,
         SingleWriter = true
     });
 
-    var computeDealChannel = Channel.CreateUnbounded<DealEvent>(new UnboundedChannelOptions
+    var computeDealChannel = Channel.CreateBounded<DealEvent>(new BoundedChannelOptions(10_000)
     {
+        FullMode = BoundedChannelFullMode.DropOldest,
         SingleReader = true,
         SingleWriter = true
     });
 
-    var tickWriterChannel = Channel.CreateUnbounded<TickEvent>(new UnboundedChannelOptions
+    var tickWriterChannel = Channel.CreateBounded<TickEvent>(new BoundedChannelOptions(50_000)
     {
+        FullMode = BoundedChannelFullMode.DropOldest,
         SingleReader = true,
         SingleWriter = true
     });
 
-    var pnlTickChannel = Channel.CreateUnbounded<TickEvent>(new UnboundedChannelOptions
+    var pnlTickChannel = Channel.CreateBounded<TickEvent>(new BoundedChannelOptions(50_000)
     {
+        FullMode = BoundedChannelFullMode.DropOldest,
         SingleReader = true,
         SingleWriter = true
     });
@@ -216,6 +229,27 @@ try
         tickChannel.Reader,
         new[] { tickWriterChannel.Writer, pnlTickChannel.Writer }));
 
+    // ── Rate Limiting (FIX 7) ───────────────────────────────────────────────
+
+    builder.Services.AddRateLimiter(options =>
+    {
+        options.RejectionStatusCode = 429;
+        options.AddFixedWindowLimiter("scan", opt =>
+        {
+            opt.PermitLimit = 2;
+            opt.Window = TimeSpan.FromMinutes(1);
+            opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+            opt.QueueLimit = 0;
+        });
+        options.AddFixedWindowLimiter("api", opt =>
+        {
+            opt.PermitLimit = 30;
+            opt.Window = TimeSpan.FromMinutes(1);
+            opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+            opt.QueueLimit = 0;
+        });
+    });
+
     // ── Services ──────────────────────────────────────────────────────────────
 
     builder.Services.AddControllers();
@@ -250,7 +284,13 @@ try
 
     builder.Services.AddSingleton(new RuleEngine(defaultRules));
     builder.Services.AddSingleton<CorrelationEngine>();
-    builder.Services.AddSingleton<PnLEngine>();
+    builder.Services.AddSingleton(sp =>
+    {
+        var symbolCache = sp.GetRequiredService<SymbolCache>();
+        return new PnLEngine(
+            sp.GetRequiredService<ILogger<PnLEngine>>(),
+            symbol => symbolCache.GetContractSize(symbol));
+    });
     builder.Services.AddSingleton<ExposureEngine>();
     builder.Services.AddSingleton<AccountScorer>();
     builder.Services.AddSingleton<BotFingerprinter>();
@@ -303,6 +343,12 @@ try
         serviceHealthTracker,
         dbEnabled));
 
+    // ── Startup Warmup (symbol cache + positions) ────────────────────────
+    builder.Services.AddHostedService<TIP.Api.Services.StartupWarmupService>();
+
+    // ── Session Reset (daily price cache reset) ──────────────────────────
+    builder.Services.AddHostedService<TIP.Api.Services.SessionResetService>();
+
     var app = builder.Build();
 
     // ── Middleware Pipeline ───────────────────────────────────────────────────
@@ -310,6 +356,7 @@ try
     app.UseMiddleware<TIP.Api.Middleware.GlobalExceptionMiddleware>();
     app.UseSerilogRequestLogging();
     app.UseCors();
+    app.UseRateLimiter();
     app.UseWebSockets();
     app.MapControllers();
 
@@ -392,75 +439,7 @@ try
         await hub.HandleConnection(ws, context.RequestAborted);
     });
 
-    // ── Load Symbol Metadata from MT5 (one-time, no price polling) ────────
-    // Prices come exclusively from live CIMTTickSink ticks via the pipeline.
-    // TickLast/TickStat are NOT called — stale data and heavy MT5 API load.
-    _ = Task.Run(async () =>
-    {
-        var symbolCache = app.Services.GetRequiredService<SymbolCache>();
-        var mt5Api = app.Services.GetRequiredService<IMT5Api>();
-        var orchestrator = app.Services.GetRequiredService<PipelineOrchestrator>();
-        var logger = app.Services.GetRequiredService<ILogger<SymbolCache>>();
-
-        // Wait for pipeline to reach at least Buffering (MT5 connected)
-        while (orchestrator.State < PipelineOrchestratorState.Buffering)
-        {
-            await Task.Delay(500, app.Lifetime.ApplicationStopping);
-        }
-
-        try
-        {
-            var symbols = mt5Api.GetSymbols();
-            symbolCache.Load(symbols);
-            logger.LogInformation("SymbolCache: loaded {Count} symbols from MT5", symbolCache.Count);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "SymbolCache: failed to load symbols from MT5");
-        }
-
-        // Load open positions from MT5 into PnLEngine for Market Watch volume data
-        try
-        {
-            var pnlEngine = app.Services.GetRequiredService<PnLEngine>();
-            var connMgr = app.Services.GetRequiredService<ConnectionManager>();
-            var groupMask = connMgr.CurrentConfig.GroupMask;
-            var logins = mt5Api.GetUserLogins(groupMask);
-            var allPositions = new List<OpenPosition>();
-
-            foreach (var login in logins)
-            {
-                try
-                {
-                    var rawPositions = mt5Api.GetPositions(login);
-                    foreach (var rp in rawPositions)
-                    {
-                        allPositions.Add(new OpenPosition
-                        {
-                            PositionId = (long)rp.PositionId,
-                            Login = rp.Login,
-                            Symbol = rp.Symbol,
-                            Direction = (int)rp.Action,
-                            Volume = rp.Volume,
-                            OpenPrice = rp.PriceOpen,
-                        });
-                    }
-                }
-                catch { /* skip logins without positions */ }
-            }
-
-            if (allPositions.Count > 0)
-            {
-                pnlEngine.Initialize(allPositions);
-                logger.LogInformation("PnLEngine: loaded {Count} open positions from {Logins} logins",
-                    allPositions.Count, logins.Length);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "PnLEngine: failed to load positions from MT5");
-        }
-    });
+    // Symbol cache + position loading handled by StartupWarmupService (registered as IHostedService)
 
     app.Run();
 }

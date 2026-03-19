@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging;
 using TIP.Api.Hubs;
 using TIP.Api.Models;
@@ -61,6 +62,7 @@ public sealed class SettingsController : ControllerBase
     /// Validates all required fields before applying.
     /// </summary>
     [HttpPost("connection")]
+    [EnableRateLimiting("api")]
     public ActionResult<ConnectionConfigResponse> Connect([FromBody] ConnectionConfigRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Server))

@@ -100,16 +100,19 @@ public sealed class ComputeEngineService : BackgroundService
         {
             try
             {
-                var historicalDeals = await _dealRepository.GetAllDealsAsync(stoppingToken).ConfigureAwait(false);
                 var warmupCount = 0;
-                foreach (var deal in historicalDeals)
+                await foreach (var batch in _dealRepository.GetAllDealsBatchedAsync(ct: stoppingToken).ConfigureAwait(false))
                 {
-                    _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId);
-                    _accountScorer.ProcessDeal(
-                        deal.DealId, deal.Login, deal.Action, deal.Volume, deal.Profit,
-                        deal.Commission, deal.Swap, deal.ExpertId, deal.Reason,
-                        deal.TimeMsc, deal.Symbol, deal.PositionId);
-                    warmupCount++;
+                    foreach (var deal in batch)
+                    {
+                        _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId,
+                            deal.Login, deal.Symbol, deal.TimeMsc);
+                        _accountScorer.ProcessDeal(
+                            deal.DealId, deal.Login, deal.Action, deal.Volume, deal.Profit,
+                            deal.Commission, deal.Swap, deal.ExpertId, deal.Reason,
+                            deal.TimeMsc, deal.Symbol, deal.PositionId);
+                        warmupCount++;
+                    }
                 }
                 _logger.LogInformation(
                     "ComputeEngineService warmup: replayed {Count} historical deals, {Accounts} accounts scored",
@@ -156,7 +159,8 @@ public sealed class ComputeEngineService : BackgroundService
     private async Task ProcessDeal(DealEvent deal)
     {
         // Step 1: Classify the deal and determine position effect
-        var result = _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId);
+        var result = _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId,
+            deal.Login, deal.Symbol, deal.TimeMsc);
 
         // Step 2: Score the account
         var account = _accountScorer.ProcessDeal(

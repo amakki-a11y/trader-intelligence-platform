@@ -24,6 +24,7 @@ public sealed class DealSink
     private readonly List<DealEvent> _buffer = new();
     private readonly object _lock = new();
     private bool _isLive;
+    private const int MaxBufferSize = 50_000;
 
     /// <summary>
     /// Initializes the deal sink in BUFFER mode.
@@ -56,6 +57,16 @@ public sealed class DealSink
             }
             else
             {
+                if (_buffer.Count >= MaxBufferSize)
+                {
+                    _logger.LogWarning("DealSink buffer full ({Max}). Dropping oldest deal.", MaxBufferSize);
+                    _buffer.RemoveAt(0);
+                }
+                else if (_buffer.Count >= MaxBufferSize * 80 / 100 && _buffer.Count % 1000 == 0)
+                {
+                    _logger.LogWarning("DealSink buffer at {Pct}% capacity ({Count}/{Max})",
+                        80, _buffer.Count, MaxBufferSize);
+                }
                 _buffer.Add(dealEvent);
             }
         }
