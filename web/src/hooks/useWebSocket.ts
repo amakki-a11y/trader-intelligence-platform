@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { getAccessToken } from "../services/api";
 
 /**
  * Custom hook for WebSocket connections with exponential backoff (FIX 2)
  * and proper timer cleanup on unmount (FIX 5).
+ * JWT token sent as query parameter for authentication.
  *
  * @param channels - array of channel names to subscribe to (e.g., ["prices"], ["deals"])
  * @param enabled - whether the WebSocket should be active
@@ -52,7 +54,9 @@ export default function useWebSocket({ channels, enabled, onMessage, staleTimeou
       if (disposed) return;
       setStatus(attempt === 0 ? "connecting" : "reconnecting");
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      const token = getAccessToken();
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+      ws = new WebSocket(`${proto}//${window.location.host}/ws${tokenParam}`);
       wsRef.current = ws;
       lastMessageAt = Date.now();
 

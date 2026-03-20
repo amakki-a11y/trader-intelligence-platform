@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import C, { sevColor } from "../styles/colors";
 import type { Account, LiveEvent } from "../store/TipStore";
 import { parseDealToLiveEvent, parseWsDealToLiveEvent } from "../utils/parsers";
+import { getAccessToken } from "../services/api";
 import type { RawDealResponse } from "../utils/parsers";
 
 /** Escape special regex characters in user input for safe use in RegExp/filter. */
@@ -118,7 +119,9 @@ function LiveMonitor({ accounts, isLive, onSelect }: LiveMonitorProps) {
     const connect = () => {
       setWsStatus("connecting");
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      const token = getAccessToken();
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+      ws = new WebSocket(`${proto}//${window.location.host}/ws${tokenParam}`);
       wsRef.current = ws;
 
       ws.onopen = () => {

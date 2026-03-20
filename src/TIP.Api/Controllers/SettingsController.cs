@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging;
@@ -22,6 +23,7 @@ namespace TIP.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/settings")]
+[Authorize]
 public sealed class SettingsController : ControllerBase
 {
     private readonly ILogger<SettingsController> _logger;

@@ -1,27 +1,45 @@
 import type { CSSProperties } from "react";
 import C from "../../styles/colors";
 
+interface User {
+  role: string;
+  permissions: string[];
+  displayName: string;
+}
+
 interface SidebarProps {
   view: string;
   setView: (v: string) => void;
   version: string;
   setVersion: (fn: (v: string) => string) => void;
   connected: boolean;
+  user?: User | null;
+  onLogout?: () => void;
 }
 
-function Sidebar({ view, setView, version, setVersion, connected }: SidebarProps) {
+function Sidebar({ view, setView, version, setVersion, connected, user, onLogout }: SidebarProps) {
+  const isAdmin = user?.permissions?.includes("admin.users") || false;
+
   const navItems = [
     { id: "market", icon: "\u{1F4CA}", label: "Market Watch" },
     { id: "grid", icon: "\u25A6", label: "Accounts" },
     { id: "live", icon: "\u25C9", label: "Live Monitor" },
     { id: "threats", icon: "\u25C6", label: "Threat View" },
   ];
+
+  const adminItems = isAdmin ? [
+    { id: "admin-users", icon: "\u{1F465}", label: "Users" },
+    { id: "admin-servers", icon: "\u{1F5A5}", label: "Servers" },
+    { id: "admin-roles", icon: "\u{1F511}", label: "Roles" },
+  ] : [];
+
   const btnS = (active: boolean): CSSProperties => ({
     width: 40, height: 40, borderRadius: 8, border: "none", cursor: "pointer",
     background: active ? "rgba(61,217,160,0.12)" : "transparent",
     color: active ? C.teal : C.t3, fontSize: 18,
     display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s",
   });
+
   return (
     <div style={{
       width: 56, background: C.bg, borderRight: `1px solid ${C.border}`,
@@ -36,7 +54,23 @@ function Sidebar({ view, setView, version, setVersion, connected }: SidebarProps
       {navItems.map(item => (
         <button key={item.id} onClick={() => setView(item.id)} style={btnS(view === item.id)} title={item.label}>{item.icon}</button>
       ))}
+      {adminItems.length > 0 && (
+        <>
+          <div style={{ width: 28, height: 1, background: C.border, margin: "4px 0" }} />
+          {adminItems.map(item => (
+            <button key={item.id} onClick={() => setView(item.id)} style={btnS(view === item.id)} title={item.label}>{item.icon}</button>
+          ))}
+        </>
+      )}
       <div style={{ flex: 1 }} />
+      {onLogout && (
+        <button onClick={onLogout} style={{
+          width: 40, height: 40, borderRadius: 8, border: "none", cursor: "pointer",
+          background: "transparent", color: C.t3, fontSize: 16,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }} title="Logout">{"\u{1F6AA}"}</button>
+      )}
+      <button onClick={() => setView("change-password")} style={btnS(view === "change-password")} title="Change Password">{"\u{1F512}"}</button>
       <button onClick={() => setView("settings")} style={btnS(view === "settings")} title="Settings">{"\u2699"}</button>
       <button onClick={() => setVersion(v => v === "v1" ? "v2" : "v1")} style={{
         width: 40, height: 22, borderRadius: 4, border: `1px solid ${C.border}`,

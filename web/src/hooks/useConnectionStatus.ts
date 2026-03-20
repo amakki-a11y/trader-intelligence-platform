@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 import type { ConnectionStatus } from "../store/TipStore";
+import { apiFetch } from "../services/api";
 
 /**
  * Polls the backend for MT5 connection status every 5 seconds.
+ * Uses apiFetch for JWT auth.
  * FIX 4: Uses AbortController to cancel in-flight requests on unmount.
  * FIX 5: Clears interval on unmount.
  */
@@ -17,11 +19,11 @@ export default function useConnectionStatus(): ConnectionStatus {
 
     const poll = async () => {
       try {
-        const res = await fetch("/api/settings/connection/status", { signal: controller.signal });
+        const res = await apiFetch("/api/settings/connection/status", { signal: controller.signal });
         if (res.ok && active) setStatus(await res.json() as ConnectionStatus);
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("[useConnectionStatus] poll failed:", err);
+        // Don't log 401 errors (expected when not logged in)
       }
     };
 

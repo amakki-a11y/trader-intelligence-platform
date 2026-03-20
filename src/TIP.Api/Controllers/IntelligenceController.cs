@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TIP.Api.Models;
 using TIP.Connector;
@@ -20,6 +21,7 @@ namespace TIP.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/intelligence")]
+[Authorize]
 public sealed class IntelligenceController : ControllerBase
 {
     private readonly AccountScorer _accountScorer;

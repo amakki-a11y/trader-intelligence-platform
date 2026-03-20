@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using TIP.Core.Engines;
@@ -19,6 +20,7 @@ namespace TIP.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/market")]
+[Authorize]
 public sealed class MarketController : ControllerBase
 {
     private readonly PriceCache _priceCache;

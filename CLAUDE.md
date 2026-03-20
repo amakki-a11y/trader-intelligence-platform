@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current State
-v2.0 Phases 1-6 complete + Sprints 1-5 hardening done + server-switch reset flow. 168 tests passing. Tested on two MT5 servers (89.21.67.56 and 31.14.254.217). Live tick streaming, tick-only pricing. Data persisting to TimescaleDB. Credentials in User Secrets. Clean server switching with auto-resolved symbol watchlist.
+v2.0 Phases 1-6 complete + Sprints 1-5 hardening + server-switch reset + **Auth & Admin system**. 168 tests passing. JWT authentication with role-based authorization (admin/dealer/compliance). Separate tip_auth PostgreSQL database. Admin UI for user management and MT5 server management. BCrypt passwords, AES-256 encrypted MT5 credentials, refresh token rotation. Login page, forced password change, admin pages for users/servers/roles.
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to v1.0 RebateAbuseDetector.
@@ -23,9 +23,11 @@ DealerHub singleton. Clients send `{ "subscribe": ["prices","accounts","position
 CircuitBreaker<T> wraps DB writes (threshold=5, open=30s) and MT5 history (threshold=3, open=60s). ServiceHealthTracker monitors all BackgroundServices. GlobalExceptionMiddleware catches unhandled exceptions.
 
 ## Tech Stack
-- **Backend:** .NET 8, ASP.NET Core, Channel<T> pipelines, Serilog
+- **Backend:** .NET 8, ASP.NET Core, Channel<T> pipelines, Serilog, JWT Bearer Auth
 - **Database:** TimescaleDB (PostgreSQL) — ticks, deals, accounts, profiles, scores
+- **Auth Database:** PostgreSQL (tip_auth) — users, roles, mt5_servers, refresh_tokens
 - **Frontend:** React 18 + TypeScript (Vite), inline CSS, recharts, lucide-react
+- **Security:** BCrypt (work factor 12), HS256 JWT, AES-256 encryption, httpOnly cookies
 - **Testing:** MSTest (168 tests)
 
 ## Project Structure
@@ -33,8 +35,8 @@ CircuitBreaker<T> wraps DB writes (threshold=5, open=30s) and MT5 history (thres
 TIP.sln
 ├── src/TIP.Core/        — Pure business logic (zero external deps)
 ├── src/TIP.Connector/   — MT5 Manager API connection + data pipeline
-├── src/TIP.Data/        — TimescaleDB access layer (Npgsql)
-├── src/TIP.Api/         — ASP.NET Core host
+├── src/TIP.Data/        — TimescaleDB access layer (Npgsql) + Auth DB repositories
+├── src/TIP.Api/         — ASP.NET Core host + JWT auth + admin services
 ├── src/TIP.Tests/       — MSTest unit tests
 ├── web/                 — React + TypeScript dashboard (Vite)
 └── docs/                — Schema, setup, changelog
@@ -72,13 +74,15 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 | 6 | Hardening: circuit breakers, error handling, security | 2026-03-18/19 | 165 |
 | S1-5 | Sprints 1-5: critical fixes, backend, frontend, hardening, polish | 2026-03-19 | 165 |
 | — | Server-switch reset flow + auto-resolved watchlist | 2026-03-19 | 168 |
+| Auth | JWT auth, RBAC, admin UI, user/server management | 2026-03-20 | 168 |
 
 See `docs/CHANGELOG.md` for detailed per-phase progress log.
 
 ## What's Next
 - **v2.1:** ML-based classification (deferred from v2.0 build order item 10)
-- **v2.1:** Multi-server support (Stage 3 — config structure already supports Servers array)
+- **v2.1:** Multi-server simultaneous connections (DB + UI ready, ConnectionManager refactor pending)
 - **v2.1:** Load testing under sustained 25K+ ticks/min
+- **v2.1:** Server-scoped data filtering per user (backend filtering by JWT server_id claims)
 
 ## Key Decisions Log
 1. **Channel<T> over queues** — bounded channels with DropOldest prevent OOM; fan-out service splits to consumers
@@ -91,3 +95,7 @@ See `docs/CHANGELOG.md` for detailed per-phase progress log.
 8. **Three-phase startup** — Buffer/Backfill/Live ensures zero deal loss during reconnect with dedup via DealSink seenIds
 9. **Server-switch reset** — PipelineOrchestrator clears all engine state (AccountScorer, PnL, Correlation, Exposure, PriceCache, server names) before connecting to new server. Pre-live warmup reloads positions + replays deals from DB. Callbacks bridge TIP.Connector → TIP.Api without violating dependency graph
 10. **Auto-resolved watchlist** — Market Watch resolves base symbol names (EURUSD, US30) to server-specific names at runtime (exact → dash suffix → shortest match). Works across servers with different naming conventions
+11. **Separate auth database** — tip_auth is plain PostgreSQL (not TimescaleDB) for users, roles, servers, tokens. Different backup/security requirements than timeseries data
+12. **JWT + httpOnly cookies** — Access token (15min) in memory, refresh token (7 days) in httpOnly cookie. Token rotation on every refresh. BCrypt work factor 12 for passwords
+13. **AES-256 encrypted MT5 passwords** — Manager API passwords encrypted at rest in tip_auth. Key from User Secrets or environment variable, never in config files
+14. **Role-based access** — admin/dealer/compliance roles with JSONB permissions array. [RequirePermission] attribute on controllers. Admin UI for user/server management

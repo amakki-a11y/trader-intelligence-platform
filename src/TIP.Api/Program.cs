@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Threading.Channels;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.IdentityModel.Tokens;
 using Serilog;
 using Serilog.Events;
 using Microsoft.AspNetCore.Http;
@@ -15,10 +18,12 @@ using Microsoft.Extensions.Options;
 using TIP.Api;
 using TIP.Api.Controllers;
 using TIP.Api.Hubs;
+using TIP.Api.Services;
 using TIP.Connector;
 using TIP.Core.Configuration;
 using TIP.Core.Engines;
 using TIP.Data;
+using TIP.Data.Auth;
 
 // ── Serilog Bootstrap ─────────────────────────────────────────────────────────
 
@@ -47,6 +52,84 @@ try
 
     // ── Scoring Configuration ─────────────────────────────────────────────────
     builder.Services.Configure<ScoringConfig>(builder.Configuration.GetSection("Scoring"));
+
+    // ── Auth Database (tip_auth) ─────────────────────────────────────────────
+
+    var authConnString = builder.Configuration.GetConnectionString("AuthDb") ?? "";
+    var authDbEnabled = !string.IsNullOrEmpty(authConnString) && !authConnString.Contains("CHANGE_ME", StringComparison.Ordinal);
+
+    if (authDbEnabled)
+    {
+        var authDbFactory = new AuthDbConnectionFactory(authConnString);
+        builder.Services.AddSingleton(authDbFactory);
+        builder.Services.AddSingleton<AuthDbInitializer>();
+        builder.Services.AddSingleton<UserRepository>();
+        builder.Services.AddSingleton<RoleRepository>();
+        builder.Services.AddSingleton<RefreshTokenRepository>();
+        builder.Services.AddSingleton<MT5ServerRepository>();
+
+        // Auth services
+        builder.Services.AddSingleton<AuthService>();
+        builder.Services.AddSingleton<UserManagementService>();
+        builder.Services.AddSingleton<EncryptionService>();
+        builder.Services.AddSingleton<MT5ServerManagementService>();
+
+        Log.Information("Auth database: ENABLED");
+    }
+    else
+    {
+        Log.Warning("Auth database: DISABLED — AuthDb connection string not configured");
+    }
+
+    // ── JWT Authentication ───────────────────────────────────────────────────
+
+    var jwtSecret = builder.Configuration["Jwt:Secret"] ?? "";
+    var jwtEnabled = !string.IsNullOrEmpty(jwtSecret) && !jwtSecret.Contains("CHANGE_ME", StringComparison.Ordinal);
+
+    if (jwtEnabled)
+    {
+        builder.Services.AddAuthentication(options =>
+        {
+            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+            options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+        }).AddJwtBearer(options =>
+        {
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ValidIssuer = builder.Configuration.GetValue("Jwt:Issuer", "TIP"),
+                ValidAudience = builder.Configuration.GetValue("Jwt:Audience", "TIP-Web"),
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+                ClockSkew = TimeSpan.FromMinutes(1)
+            };
+
+            // Allow JWT from query string for WebSocket connections
+            options.Events = new JwtBearerEvents
+            {
+                OnMessageReceived = context =>
+                {
+                    var accessToken = context.Request.Query["token"];
+                    var path = context.HttpContext.Request.Path;
+
+                    if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/ws"))
+                    {
+                        context.Token = accessToken;
+                    }
+
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }
+            };
+        });
+        builder.Services.AddAuthorization();
+        Log.Information("JWT authentication: ENABLED");
+    }
+    else
+    {
+        Log.Warning("JWT authentication: DISABLED — Jwt:Secret not configured");
+    }
 
     // ── Channel<T> Pipelines ──────────────────────────────────────────────────
 
@@ -443,9 +526,23 @@ try
     app.UseMiddleware<TIP.Api.Middleware.GlobalExceptionMiddleware>();
     app.UseSerilogRequestLogging();
     app.UseCors();
+
+    if (jwtEnabled)
+    {
+        app.UseAuthentication();
+        app.UseAuthorization();
+    }
+
     app.UseRateLimiter();
     app.UseWebSockets();
     app.MapControllers();
+
+    // Initialize auth database (create tables + seed data) on startup
+    if (authDbEnabled)
+    {
+        var authInitializer = app.Services.GetRequiredService<AuthDbInitializer>();
+        await authInitializer.InitializeAsync().ConfigureAwait(false);
+    }
 
     // ── Health Check ──────────────────────────────────────────────────────────
 

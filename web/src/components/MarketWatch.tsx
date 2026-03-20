@@ -1,6 +1,7 @@
 import { Fragment, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import C, { DEFAULT_WATCHLIST_BASES, resolveWatchlist } from "../styles/colors";
 import type { MarketDataPoint, VolumeData } from "../store/TipStore";
+import { getAccessToken } from "../services/api";
 
 function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
   void _isLive;
@@ -146,7 +147,9 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     const connect = () => {
       setWsStatus("connecting");
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      const token = getAccessToken();
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+      ws = new WebSocket(`${proto}//${window.location.host}/ws${tokenParam}`);
       wsRef.current = ws;
       lastMessageAt = Date.now();
 

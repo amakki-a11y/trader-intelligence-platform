@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging;
@@ -23,6 +24,7 @@ namespace TIP.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api")]
+[Authorize]
 public sealed class AnalyticsController : ControllerBase
 {
     /// <summary>

@@ -13,6 +13,8 @@ function Badge({ color, children, small }: { color: string; children: ReactNode;
   );
 }
 
+interface User { displayName: string; role: string; }
+
 interface TopBarProps {
   view: string;
   accounts: Account[];
@@ -21,12 +23,18 @@ interface TopBarProps {
   onToggleLive: () => void;
   onScan: () => void;
   scanning: boolean;
+  user?: User | null;
 }
 
-function TopBar({ view, accounts, version, isLive, onToggleLive, onScan, scanning }: TopBarProps) {
+function TopBar({ view, accounts, version, isLive, onToggleLive, onScan, scanning, user: _user }: TopBarProps) {
   const critCount = accounts.filter(a => a.sev === "CRITICAL").length;
   const highCount = accounts.filter(a => a.sev === "HIGH").length;
-  const titles: Record<string, string> = { grid: "Account Scanner", live: "Live Monitor", market: "Market Watch", threats: "Threat Intelligence", settings: "Settings" };
+  const titles: Record<string, string> = {
+    grid: "Account Scanner", live: "Live Monitor", market: "Market Watch",
+    threats: "Threat Intelligence", settings: "Settings",
+    "admin-users": "User Management", "admin-servers": "MT5 Servers",
+    "admin-roles": "Roles & Permissions", "change-password": "Change Password",
+  };
   return (
     <div style={{
       height: 52, padding: "0 20px", display: "flex", alignItems: "center",
