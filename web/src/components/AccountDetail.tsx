@@ -168,7 +168,20 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
                 updated[idx] = { ...updated[idx]!, currentPrice: p.currentPrice, profit: p.unrealizedPnl, swap: p.swap };
                 return updated;
               }
-              return prev;
+              // New position — add it to the list
+              return [...prev, {
+                ticket: p.positionId,
+                time: new Date().toISOString(),
+                symbol: p.symbol,
+                action: p.direction === 0 ? "BUY" : "SELL",
+                volume: p.volume,
+                openPrice: p.openPrice,
+                currentPrice: p.currentPrice,
+                profit: p.unrealizedPnl,
+                swap: p.swap,
+                sl: 0,
+                tp: 0,
+              }];
             });
           }
         } catch { /* ignore parse errors */ }
@@ -216,13 +229,16 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
   const totalOpenSwap = openTrades.reduce((s, t) => s + t.swap, 0);
   const floatingPnl = totalOpenPnl + totalOpenSwap;
 
+  // Live equity = balance + floating P&L (updates with every position change)
+  const liveEquity = acctInfo.balance + floatingPnl;
+
   const infoItems = [
-    { label: "Balance", val: "$" + acctInfo.balance.toLocaleString(), color: C.t1 },
-    { label: "Equity", val: "$" + acctInfo.equity.toLocaleString(), color: acctInfo.equity >= acctInfo.balance ? C.green : C.red },
+    { label: "Balance", val: "$" + acctInfo.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: C.t1 },
+    { label: "Equity", val: "$" + liveEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: liveEquity >= acctInfo.balance ? C.green : C.red },
     { label: "Floating P&L", val: (floatingPnl >= 0 ? "+$" : "-$") + Math.abs(floatingPnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: floatingPnl >= 0 ? C.green : C.red },
     { label: "Margin", val: "$" + acctInfo.margin.toLocaleString(), color: C.amber },
-    { label: "Free Margin", val: "$" + acctInfo.freeMargin.toLocaleString(), color: C.t1 },
-    { label: "Margin Level", val: acctInfo.marginLevel, color: C.teal },
+    { label: "Free Margin", val: "$" + (liveEquity - acctInfo.margin).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: C.t1 },
+    { label: "Margin Level", val: acctInfo.margin > 0 ? ((liveEquity / acctInfo.margin) * 100).toFixed(0) + "%" : "0%", color: C.teal },
     { label: "Leverage", val: acctInfo.leverage, color: C.purple },
     { label: "Credit", val: "$" + acctInfo.credit.toLocaleString(), color: C.amber },
     { label: "Currency", val: acctInfo.currency, color: C.t1 },
