@@ -75,6 +75,7 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 | S1-5 | Sprints 1-5: critical fixes, backend, frontend, hardening, polish | 2026-03-19 | 165 |
 | — | Server-switch reset flow + auto-resolved watchlist | 2026-03-19 | 168 |
 | Auth | JWT auth, RBAC, admin UI, user/server management | 2026-03-20 | 168 |
+| UI | Settings consolidation, v1/v2 removal, MT5 TickStat session stats, symbol resolver fix | 2026-03-20 | 168 |
 
 See `docs/CHANGELOG.md` for detailed per-phase progress log.
 
@@ -86,7 +87,7 @@ See `docs/CHANGELOG.md` for detailed per-phase progress log.
 
 ## Key Decisions Log
 1. **Channel<T> over queues** — bounded channels with DropOldest prevent OOM; fan-out service splits to consumers
-2. **Tick-only pricing** — removed all TickLast/TickStat polling; CIMTTickSink is the single source of truth
+2. **Tick-only pricing + TickStat for session stats** — live prices from CIMTTickSink only (no TickLast polling). Session HIGH/LOW from MT5 TickStat API via `/api/market/session-stats` endpoint for accurate full-session data
 3. **SelectedAddAll()** — MT5 pump only streams "Selected" symbols; must call this before TickSubscribe
 4. **RegisterSink before Subscribe** — CIMTDealSink.RegisterSink() MUST precede DealSubscribe or MT_RET_ERR_PARAMS
 5. **Server-scoped warmup** — DealRepository filters by server address to prevent ghost accounts from other managers
@@ -94,7 +95,7 @@ See `docs/CHANGELOG.md` for detailed per-phase progress log.
 7. **User Secrets for credentials** — MT5 password and DB password never in appsettings.json; CHANGE_ME placeholders only
 8. **Three-phase startup** — Buffer/Backfill/Live ensures zero deal loss during reconnect with dedup via DealSink seenIds
 9. **Server-switch reset** — PipelineOrchestrator clears all engine state (AccountScorer, PnL, Correlation, Exposure, PriceCache, server names) before connecting to new server. Pre-live warmup reloads positions + replays deals from DB. Callbacks bridge TIP.Connector → TIP.Api without violating dependency graph
-10. **Auto-resolved watchlist** — Market Watch resolves base symbol names (EURUSD, US30) to server-specific names at runtime (exact → dash suffix → shortest match). Works across servers with different naming conventions
+10. **Auto-resolved watchlist** — Market Watch resolves base symbol names (EURUSD, US30) to server-specific names at runtime using live price data. Prefers symbols with active tick feeds (e.g., EURUSD- over EURUSD when only the dash variant has a feed). Components stay mounted via CSS display:none to preserve state across navigation
 11. **Separate auth database** — tip_auth is plain PostgreSQL (not TimescaleDB) for users, roles, servers, tokens. Different backup/security requirements than timeseries data
 12. **JWT + httpOnly cookies** — Access token (15min) in memory, refresh token (7 days) in httpOnly cookie. Token rotation on every refresh. BCrypt work factor 12 for passwords
 13. **AES-256 encrypted MT5 passwords** — Manager API passwords encrypted at rest in tip_auth. Key from User Secrets or environment variable, never in config files
