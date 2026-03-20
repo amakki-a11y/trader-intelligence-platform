@@ -227,12 +227,15 @@ public sealed class MT5ApiReal : IMT5Api
         var res = _manager.UserRequest(login, _user);
         if (res != MTRetCode.MT_RET_OK) return null;
 
-        // Get equity from CIMTAccount (CIMTUser does not have Equity)
-        double equity = 0;
+        // Get equity, margin, free margin from CIMTAccount (CIMTUser does not have these)
+        double equity = 0, margin = 0, freeMargin = 0, credit = 0;
         _account.Clear();
         if (_manager.UserAccountRequest(login, _account) == MTRetCode.MT_RET_OK)
         {
             equity = _account.Equity();
+            margin = _account.Margin();
+            freeMargin = _account.MarginFree();
+            credit = _account.Credit();
         }
 
         return new RawUser
@@ -243,6 +246,12 @@ public sealed class MT5ApiReal : IMT5Api
             Leverage = _user.Leverage(),
             Balance = _user.Balance(),
             Equity = equity,
+            Margin = margin,
+            FreeMargin = freeMargin,
+            Credit = credit,
+            Currency = "USD", // CIMTUser currency method varies by SDK version
+            RegistrationTime = (long)_user.Registration(),
+            LastAccessTime = (long)_user.LastAccess(),
             Agent = (ulong)_user.Agent()
         };
     }

@@ -59,7 +59,7 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
     credit: 0, registration: "", lastLogin: "", server: "", currency: "USD",
   });
 
-  // FIX 3+4: Fetch live account info from MT5 with AbortController and error handling
+  // Fetch live account info from MT5 (balance, margin, credit, registration, etc.)
   useEffect(() => {
     const controller = new AbortController();
     apiFetch(`/api/accounts/${account.login}/info`, { signal: controller.signal })
@@ -67,12 +67,21 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
       .then(d => {
         const data = d as Record<string, unknown>;
         if (data.error) return;
+
+        const regTime = data.registrationTime as number;
+        const lastTime = data.lastAccessTime as number;
+
         setAcctInfo(prev => ({
           ...prev,
           balance: (data.balance as number) ?? 0,
           equity: (data.equity as number) ?? 0,
+          margin: (data.margin as number) ?? 0,
+          freeMargin: (data.freeMargin as number) ?? 0,
+          credit: (data.credit as number) ?? 0,
           leverage: data.leverage ? `1:${data.leverage}` : prev.leverage,
-          freeMargin: ((data.equity as number) ?? 0) - prev.margin,
+          currency: (data.currency as string) ?? "USD",
+          registration: regTime > 0 ? new Date(regTime * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "",
+          lastLogin: lastTime > 0 ? new Date(lastTime * 1000).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "",
         }));
       })
       .catch((err: unknown) => {

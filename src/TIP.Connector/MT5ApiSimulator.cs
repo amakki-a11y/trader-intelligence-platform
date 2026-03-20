@@ -155,14 +155,19 @@ public sealed class MT5ApiSimulator : IMT5Api
         if (login < MinLogin || login > MaxLogin)
             return null;
 
+        var balance = 10000.0 + (login - MinLogin) * 500.0;
         return new RawUser
         {
             Login = login,
             Name = $"Simulated Trader {login}",
             Group = "real\\standard",
             Leverage = 100,
-            Balance = 10000.0 + (login - MinLogin) * 500.0,
-            Equity = 10000.0 + (login - MinLogin) * 500.0,
+            Balance = balance,
+            Equity = balance,
+            Margin = 0,
+            FreeMargin = balance,
+            Credit = 0,
+            Currency = "USD",
             Agent = login % 5 == 0 ? login - 1 : 0
         };
     }

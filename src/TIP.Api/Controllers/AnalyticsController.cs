@@ -187,7 +187,13 @@ public sealed class AnalyticsController : ControllerBase
             group = user.Group,
             balance = user.Balance,
             equity = user.Equity,
+            margin = user.Margin,
+            freeMargin = user.FreeMargin,
+            credit = user.Credit,
             leverage = user.Leverage,
+            currency = user.Currency,
+            registrationTime = user.RegistrationTime,
+            lastAccessTime = user.LastAccessTime,
         });
     }
 

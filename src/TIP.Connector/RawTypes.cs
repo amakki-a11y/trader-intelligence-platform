@@ -106,6 +106,24 @@ public sealed record RawUser
     /// <summary>Account equity.</summary>
     public required double Equity { get; init; }
 
+    /// <summary>Used margin.</summary>
+    public double Margin { get; init; }
+
+    /// <summary>Free margin (equity - margin).</summary>
+    public double FreeMargin { get; init; }
+
+    /// <summary>Credit amount.</summary>
+    public double Credit { get; init; }
+
+    /// <summary>Account currency (e.g., "USD").</summary>
+    public string Currency { get; init; } = "USD";
+
+    /// <summary>Registration time (Unix timestamp in seconds).</summary>
+    public long RegistrationTime { get; init; }
+
+    /// <summary>Last access time (Unix timestamp in seconds).</summary>
+    public long LastAccessTime { get; init; }
+
     /// <summary>IB parent login (0 if no agent).</summary>
     public required ulong Agent { get; init; }
 }
