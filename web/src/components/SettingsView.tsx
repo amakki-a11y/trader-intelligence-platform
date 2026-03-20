@@ -14,14 +14,14 @@ interface SettingsViewProps {
   connectionStatus: ConnectionStatus;
 }
 
-type SettingsTab = "connection" | "servers" | "users" | "roles" | "password";
+type SettingsTab = "servers" | "users" | "roles" | "password";
 
 function SettingsView({ connectionStatus }: SettingsViewProps) {
   const { hasPermission } = useAuth();
   const isAdmin = hasPermission("admin.users");
   const canManageServers = hasPermission("admin.servers");
 
-  const [tab, setTab] = useState<SettingsTab>(canManageServers ? "servers" : "connection");
+  const [tab, setTab] = useState<SettingsTab>("servers");
   const [server, setServer] = useState("");
   const [login, setLogin] = useState("");
   const passwordRef = useRef<HTMLInputElement>(null);
@@ -151,8 +151,7 @@ function SettingsView({ connectionStatus }: SettingsViewProps) {
 
   // Build tabs list based on permissions
   const tabs: { id: SettingsTab; label: string }[] = [];
-  if (canManageServers) tabs.push({ id: "servers", label: "MT5 Servers" });
-  tabs.push({ id: "connection", label: "Connection" });
+  tabs.push({ id: "servers", label: "MT5 Servers" });
   if (isAdmin) tabs.push({ id: "users", label: "Users" });
   if (isAdmin) tabs.push({ id: "roles", label: "Roles" });
   tabs.push({ id: "password", label: "Change Password" });
@@ -199,109 +198,110 @@ function SettingsView({ connectionStatus }: SettingsViewProps) {
 
       {/* Tab Content */}
       <div style={{ flex: 1, overflow: "auto" }}>
-        {tab === "servers" && canManageServers && <ServerManagement />}
+        {tab === "servers" && (
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {/* MT5 Servers Table (admin can add/remove) */}
+            {canManageServers && <ServerManagement />}
 
-        {tab === "connection" && (
-          <div style={{ padding: 20, display: "flex", gap: 16, flex: 1 }}>
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 16 }}>
-              {/* MT5 Manager Connection Form */}
-              <div style={cardS}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: C.t1, marginBottom: 14 }}>MT5 Manager Connection</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div>
-                    <div style={labelS}>Server Address</div>
-                    <input value={server} onChange={e => setServer(e.target.value)} placeholder="mt5-live.broker.com:443" style={inputS} />
-                  </div>
-                  <div>
-                    <div style={labelS}>Manager Login</div>
-                    <input value={login} onChange={e => setLogin(e.target.value)} placeholder="Manager ID number" style={inputS} />
-                  </div>
-                  <div>
-                    <div style={labelS}>Manager Password</div>
-                    <div style={{ position: "relative" }}>
-                      <input
-                        ref={passwordRef}
-                        type={showPassword ? "text" : "password"}
-                        placeholder={"••••••••"} style={inputS}
-                      />
-                      <button onClick={() => setShowPassword(v => !v)} style={{
-                        position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
-                        background: "none", border: "none", cursor: "pointer", color: C.t3, fontSize: 14,
-                      }}>{showPassword ? "\u{1F648}" : "\u{1F441}"}</button>
+            {/* Quick Connect + Scan Settings + Connection Log */}
+            <div style={{ padding: "0 20px 20px", display: "flex", gap: 16 }}>
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 16 }}>
+                {/* Quick Connect Form */}
+                <div style={cardS}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.t1, marginBottom: 14 }}>Quick Connect</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div>
+                        <div style={labelS}>Server Address</div>
+                        <input value={server} onChange={e => setServer(e.target.value)} placeholder="mt5-live.broker.com:443" style={inputS} />
+                      </div>
+                      <div>
+                        <div style={labelS}>Manager Login</div>
+                        <input value={login} onChange={e => setLogin(e.target.value)} placeholder="Manager ID number" style={inputS} />
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div>
+                        <div style={labelS}>Manager Password</div>
+                        <div style={{ position: "relative" }}>
+                          <input ref={passwordRef} type={showPassword ? "text" : "password"} placeholder={"••••••••"} style={inputS} />
+                          <button onClick={() => setShowPassword(v => !v)} style={{
+                            position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                            background: "none", border: "none", cursor: "pointer", color: C.t3, fontSize: 14,
+                          }}>{showPassword ? "\u{1F648}" : "\u{1F441}"}</button>
+                        </div>
+                      </div>
+                      <div>
+                        <div style={labelS}>Group Mask</div>
+                        <input value={groupMask} onChange={e => setGroupMask(e.target.value)} placeholder="*" style={inputS} />
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+                      <button onClick={handleSave} disabled={saving || !server || !login}
+                        style={{ ...btnPrimary, background: C.blue, opacity: saving || !server || !login ? 0.5 : 1, flex: 1 }}>
+                        {saving ? "SAVING..." : saved ? "SAVED" : "SAVE CREDENTIALS"}
+                      </button>
+                      <button onClick={handleConnect} disabled={connecting || !server || !login}
+                        style={{ ...btnPrimary, opacity: connecting || !server || !login ? 0.5 : 1, flex: 1 }}>
+                        {connecting ? "CONNECTING..." : hasPassword() ? "CONNECT" : "RECONNECT"}
+                      </button>
                     </div>
                   </div>
-                  <div>
-                    <div style={labelS}>Group Mask</div>
-                    <input value={groupMask} onChange={e => setGroupMask(e.target.value)} placeholder="forex\retail*" style={inputS} />
-                    <div style={{ fontSize: 10, color: C.t3, marginTop: 4 }}>
-                      Wildcard syntax: * matches any, \ separates groups (e.g. forex\retail\*)
-                    </div>
+                </div>
+
+                {/* Scan Settings */}
+                <div style={cardS}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: C.t1 }}>Scan Settings</div>
+                    <button onClick={handleScanSave} style={{ ...btnPrimary, padding: "5px 14px", fontSize: 11 }}>
+                      {scanSaved ? "\u2713 SAVED" : "SAVE"}
+                    </button>
                   </div>
-                  <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-                    <button onClick={handleSave} disabled={saving || !server || !login}
-                      style={{ ...btnPrimary, background: C.blue, opacity: saving || !server || !login ? 0.5 : 1, flex: 1 }}>
-                      {saving ? "SAVING..." : saved ? "SAVED" : "SAVE CREDENTIALS"}
-                    </button>
-                    <button onClick={handleConnect} disabled={connecting || !server || !login}
-                      style={{ ...btnPrimary, opacity: connecting || !server || !login ? 0.5 : 1, flex: 1 }}>
-                      {connecting ? "CONNECTING..." : hasPassword() ? "CONNECT" : "RECONNECT"}
-                    </button>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div>
+                      <div style={labelS}>History Days</div>
+                      <input type="number" value={scan.historyDays} onChange={e => setScan(s => ({ ...s, historyDays: +e.target.value }))} style={numInputS} />
+                    </div>
+                    <div>
+                      <div style={labelS}>Min Deposit ($)</div>
+                      <input type="number" value={scan.minDeposit} onChange={e => setScan(s => ({ ...s, minDeposit: +e.target.value }))} style={numInputS} />
+                    </div>
+                    <div>
+                      <div style={labelS}>Poll Interval (ms)</div>
+                      <input type="number" value={scan.pollIntervalMs} onChange={e => setScan(s => ({ ...s, pollIntervalMs: +e.target.value }))} style={numInputS} />
+                    </div>
+                    <div>
+                      <div style={labelS}>Critical Threshold</div>
+                      <input type="number" value={scan.criticalThreshold} onChange={e => setScan(s => ({ ...s, criticalThreshold: +e.target.value }))} style={numInputS} />
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* Scan Settings */}
-              <div style={cardS}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: C.t1 }}>Scan Settings</div>
-                  <button onClick={handleScanSave} style={{ ...btnPrimary, padding: "5px 14px", fontSize: 11 }}>
-                    {scanSaved ? "\u2713 SAVED" : "SAVE"}
-                  </button>
+              {/* Right column: Connection Log */}
+              <div style={{ ...cardS, flex: 1, display: "flex", flexDirection: "column", minHeight: 260 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.t1, marginBottom: 10 }}>Connection Log</div>
+                <div ref={logRef} style={{
+                  flex: 1, overflow: "auto", fontSize: 11, fontFamily: "'JetBrains Mono',Consolas,monospace",
+                  lineHeight: 1.7, color: C.t2,
+                }}>
+                  {logs.length === 0 && (
+                    <div style={{ color: C.t3, textAlign: "center", marginTop: 40 }}>No connection events yet</div>
+                  )}
+                  {logs.map((entry, i) => {
+                    const icon = entry.level === "success" ? "\u2713" : entry.level === "error" ? "\u2717" : "\u2139";
+                    const iconColor = entry.level === "success" ? C.teal : entry.level === "error" ? C.red : C.t3;
+                    const ts = new Date(entry.timestamp);
+                    const timeStr = ts.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+                    return (
+                      <div key={i} style={{ display: "flex", gap: 8, padding: "2px 0" }}>
+                        <span style={{ color: C.t3, flexShrink: 0 }}>{timeStr}</span>
+                        <span style={{ color: iconColor, flexShrink: 0, width: 12, textAlign: "center" }}>{icon}</span>
+                        <span style={{ color: entry.level === "error" ? C.red : C.t2 }}>{entry.message}</span>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                  <div>
-                    <div style={labelS}>History Days</div>
-                    <input type="number" value={scan.historyDays} onChange={e => setScan(s => ({ ...s, historyDays: +e.target.value }))} style={numInputS} />
-                  </div>
-                  <div>
-                    <div style={labelS}>Min Deposit ($)</div>
-                    <input type="number" value={scan.minDeposit} onChange={e => setScan(s => ({ ...s, minDeposit: +e.target.value }))} style={numInputS} />
-                  </div>
-                  <div>
-                    <div style={labelS}>Poll Interval (ms)</div>
-                    <input type="number" value={scan.pollIntervalMs} onChange={e => setScan(s => ({ ...s, pollIntervalMs: +e.target.value }))} style={numInputS} />
-                  </div>
-                  <div>
-                    <div style={labelS}>Critical Threshold</div>
-                    <input type="number" value={scan.criticalThreshold} onChange={e => setScan(s => ({ ...s, criticalThreshold: +e.target.value }))} style={numInputS} />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Right column: Connection Log */}
-            <div style={{ ...cardS, flex: 1, display: "flex", flexDirection: "column", minHeight: 300 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: C.t1, marginBottom: 10 }}>Connection Log</div>
-              <div ref={logRef} style={{
-                flex: 1, overflow: "auto", fontSize: 11, fontFamily: "'JetBrains Mono',Consolas,monospace",
-                lineHeight: 1.7, color: C.t2,
-              }}>
-                {logs.length === 0 && (
-                  <div style={{ color: C.t3, textAlign: "center", marginTop: 40 }}>No connection events yet</div>
-                )}
-                {logs.map((entry, i) => {
-                  const icon = entry.level === "success" ? "\u2713" : entry.level === "error" ? "\u2717" : "\u2139";
-                  const iconColor = entry.level === "success" ? C.teal : entry.level === "error" ? C.red : C.t3;
-                  const ts = new Date(entry.timestamp);
-                  const timeStr = ts.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-                  return (
-                    <div key={i} style={{ display: "flex", gap: 8, padding: "2px 0" }}>
-                      <span style={{ color: C.t3, flexShrink: 0 }}>{timeStr}</span>
-                      <span style={{ color: iconColor, flexShrink: 0, width: 12, textAlign: "center" }}>{icon}</span>
-                      <span style={{ color: entry.level === "error" ? C.red : C.t2 }}>{entry.message}</span>
-                    </div>
-                  );
-                })}
               </div>
             </div>
           </div>
