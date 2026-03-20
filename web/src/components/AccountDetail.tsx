@@ -59,36 +59,40 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
     credit: 0, registration: "", lastLogin: "", server: "", currency: "USD",
   });
 
-  // Fetch live account info from MT5 (balance, margin, credit, registration, etc.)
+  // Poll live account info from MT5 every 2s (balance, equity, margin, credit, etc.)
+  // MT5 CIMTAccount provides real-time margin/equity/free margin that change with positions
   useEffect(() => {
     const controller = new AbortController();
-    apiFetch(`/api/accounts/${account.login}/info`, { signal: controller.signal })
-      .then(r => r.json())
-      .then(d => {
-        const data = d as Record<string, unknown>;
+    const fetchInfo = async () => {
+      try {
+        const res = await apiFetch(`/api/accounts/${account.login}/info`, { signal: controller.signal });
+        if (!res.ok) return;
+        const data = await res.json() as Record<string, unknown>;
         if (data.error) return;
 
         const regTime = data.registrationTime as number;
         const lastTime = data.lastAccessTime as number;
 
-        setAcctInfo(prev => ({
-          ...prev,
+        setAcctInfo({
           balance: (data.balance as number) ?? 0,
           equity: (data.equity as number) ?? 0,
           margin: (data.margin as number) ?? 0,
           freeMargin: (data.freeMargin as number) ?? 0,
           credit: (data.credit as number) ?? 0,
-          leverage: data.leverage ? `1:${data.leverage}` : prev.leverage,
+          leverage: data.leverage ? `1:${data.leverage}` : "1:100",
           currency: (data.currency as string) ?? "USD",
           registration: regTime > 0 ? new Date(regTime * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "",
           lastLogin: lastTime > 0 ? new Date(lastTime * 1000).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "",
-        }));
-      })
-      .catch((err: unknown) => {
+          marginLevel: "0%",
+          server: "",
+        });
+      } catch (err: unknown) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("[AccountDetail] info fetch failed:", err);
-      });
-    return () => controller.abort();
+      }
+    };
+    fetchInfo();
+    const interval = setInterval(fetchInfo, 2000);
+    return () => { clearInterval(interval); controller.abort(); };
   }, [account.login]);
 
   // Fetch deal history — triggered on initial load and when LOAD button clicked
@@ -285,16 +289,17 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
   const totalOpenSwap = openTrades.reduce((s, t) => s + t.swap, 0);
   const floatingPnl = totalOpenPnl + totalOpenSwap;
 
-  // Live equity = balance + floating P&L (updates with every position change)
-  const liveEquity = acctInfo.balance + floatingPnl;
+  // Use MT5 real-time values directly (polled every 2s from UserAccountRequest)
+  // Floating P&L still computed from WebSocket positions for the info panel display
+  const marginLevel = acctInfo.margin > 0 ? ((acctInfo.equity / acctInfo.margin) * 100) : 0;
 
   const infoItems = [
     { label: "Balance", val: "$" + acctInfo.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: C.t1 },
-    { label: "Equity", val: "$" + liveEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: liveEquity >= acctInfo.balance ? C.green : C.red },
+    { label: "Equity", val: "$" + acctInfo.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: acctInfo.equity >= acctInfo.balance ? C.green : C.red },
     { label: "Floating P&L", val: (floatingPnl >= 0 ? "+$" : "-$") + Math.abs(floatingPnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: floatingPnl >= 0 ? C.green : C.red },
-    { label: "Margin", val: "$" + acctInfo.margin.toLocaleString(), color: C.amber },
-    { label: "Free Margin", val: "$" + (liveEquity - acctInfo.margin).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: C.t1 },
-    { label: "Margin Level", val: acctInfo.margin > 0 ? ((liveEquity / acctInfo.margin) * 100).toFixed(0) + "%" : "0%", color: C.teal },
+    { label: "Margin", val: "$" + acctInfo.margin.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: C.amber },
+    { label: "Free Margin", val: "$" + acctInfo.freeMargin.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: acctInfo.freeMargin >= 0 ? C.t1 : C.red },
+    { label: "Margin Level", val: marginLevel > 0 ? marginLevel.toFixed(2) + "%" : "0%", color: marginLevel > 100 ? C.teal : marginLevel > 50 ? C.amber : C.red },
     { label: "Leverage", val: acctInfo.leverage, color: C.purple },
     { label: "Credit", val: "$" + acctInfo.credit.toLocaleString(), color: C.amber },
     { label: "Currency", val: acctInfo.currency, color: C.t1 },
