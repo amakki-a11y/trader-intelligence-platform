@@ -285,12 +285,12 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
   const thStyle: CSSProperties = { padding: "6px 6px", fontSize: 9, fontFamily: "'JetBrains Mono',monospace", fontWeight: 600, color: C.t3, textAlign: "left", borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: C.bg2, textTransform: "uppercase", letterSpacing: "0.5px" };
   const tdStyle: CSSProperties = { padding: "5px 6px", fontSize: 11, color: C.t2, fontFamily: "'JetBrains Mono',monospace", borderBottom: `1px solid ${C.border}` };
   const dateInputStyle: CSSProperties = { background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 5, padding: "4px 8px", color: C.t1, fontSize: 11, fontFamily: "'JetBrains Mono',monospace", outline: "none", colorScheme: "dark" };
-  const totalOpenPnl = openTrades.reduce((s, t) => s + t.profit, 0);
-  const totalOpenSwap = openTrades.reduce((s, t) => s + t.swap, 0);
-  const floatingPnl = totalOpenPnl + totalOpenSwap;
+  // Floating P&L from MT5 (equity - balance) — accurate, polled every 2s
+  const floatingPnl = acctInfo.equity - acctInfo.balance;
 
-  // Use MT5 real-time values directly (polled every 2s from UserAccountRequest)
-  // Floating P&L still computed from WebSocket positions for the info panel display
+  // Total P&L from open trades table (WebSocket positions — for the TOTAL P&L row)
+  const totalOpenPnl = openTrades.reduce((s, t) => s + t.profit, 0);
+
   const marginLevel = acctInfo.margin > 0 ? ((acctInfo.equity / acctInfo.margin) * 100) : 0;
 
   const infoItems = [
