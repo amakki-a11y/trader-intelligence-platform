@@ -51,6 +51,7 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
   const [acctInfoExpanded, setAcctInfoExpanded] = useState(false);
   const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 90); return d.toISOString().slice(0, 10); });
   const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [loadTrigger, setLoadTrigger] = useState(0); // incremented to force refetch
 
   const [acctInfo, setAcctInfo] = useState({
     balance: 0, equity: 0, margin: 0, freeMargin: 0,
@@ -81,7 +82,7 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
     return () => controller.abort();
   }, [account.login]);
 
-  // FIX 3+4: Fetch real deal history with AbortController and error handling
+  // Fetch deal history — triggered on initial load and when LOAD button clicked
   useEffect(() => {
     const controller = new AbortController();
     setFetchError(null);
@@ -97,7 +98,8 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
         setFetchError("Failed to load deal history");
       });
     return () => controller.abort();
-  }, [account.login, dateFrom, dateTo]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account.login, loadTrigger]);
 
   const [openTrades, setOpenTrades] = useState<OpenTrade[]>([]);
 
@@ -129,7 +131,7 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
       }
     };
     fetchPositions();
-    const interval = setInterval(fetchPositions, 5000);
+    const interval = setInterval(fetchPositions, 2000);
     return () => { clearInterval(interval); controller.abort(); };
   }, [account.login]);
 
@@ -154,9 +156,14 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
   const thStyle: CSSProperties = { padding: "6px 6px", fontSize: 9, fontFamily: "'JetBrains Mono',monospace", fontWeight: 600, color: C.t3, textAlign: "left", borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: C.bg2, textTransform: "uppercase", letterSpacing: "0.5px" };
   const tdStyle: CSSProperties = { padding: "5px 6px", fontSize: 11, color: C.t2, fontFamily: "'JetBrains Mono',monospace", borderBottom: `1px solid ${C.border}` };
   const dateInputStyle: CSSProperties = { background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 5, padding: "4px 8px", color: C.t1, fontSize: 11, fontFamily: "'JetBrains Mono',monospace", outline: "none", colorScheme: "dark" };
+  const totalOpenPnl = openTrades.reduce((s, t) => s + t.profit, 0);
+  const totalOpenSwap = openTrades.reduce((s, t) => s + t.swap, 0);
+  const floatingPnl = totalOpenPnl + totalOpenSwap;
+
   const infoItems = [
     { label: "Balance", val: "$" + acctInfo.balance.toLocaleString(), color: C.t1 },
     { label: "Equity", val: "$" + acctInfo.equity.toLocaleString(), color: acctInfo.equity >= acctInfo.balance ? C.green : C.red },
+    { label: "Floating P&L", val: (floatingPnl >= 0 ? "+$" : "-$") + Math.abs(floatingPnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: floatingPnl >= 0 ? C.green : C.red },
     { label: "Margin", val: "$" + acctInfo.margin.toLocaleString(), color: C.amber },
     { label: "Free Margin", val: "$" + acctInfo.freeMargin.toLocaleString(), color: C.t1 },
     { label: "Margin Level", val: acctInfo.marginLevel, color: C.teal },
@@ -166,7 +173,6 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
     { label: "Registered", val: acctInfo.registration, color: C.t3 },
     { label: "Last Login", val: acctInfo.lastLogin, color: C.t3 },
   ];
-  const totalOpenPnl = openTrades.reduce((s, t) => s + t.profit, 0);
 
   return (
     <div style={{ flex: 1, overflow: "auto", padding: 20 }}>
@@ -225,7 +231,7 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
         <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={dateInputStyle} />
         <span style={{ fontSize: 10, color: C.t3 }}>Till</span>
         <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={dateInputStyle} />
-        <button style={{ padding: "4px 12px", borderRadius: 5, border: `1px solid ${C.teal}40`, background: C.tealBg, color: C.teal, fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono',monospace", cursor: "pointer" }}>LOAD</button>
+        <button onClick={() => setLoadTrigger(n => n + 1)} style={{ padding: "4px 12px", borderRadius: 5, border: `1px solid ${C.teal}40`, background: C.tealBg, color: C.teal, fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono',monospace", cursor: "pointer" }}>LOAD</button>
       </div>
       {/* Stats cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginBottom: 20 }}>
