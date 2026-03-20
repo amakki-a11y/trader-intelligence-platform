@@ -153,7 +153,7 @@ public sealed class MarketController : ControllerBase
             s.ContractSize,
             s.CurrencyBase,
             s.CurrencyProfit
-        }).Take(500).ToList();
+        }).ToList();
 
         return Ok(result);
     }

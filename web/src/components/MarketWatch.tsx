@@ -6,7 +6,6 @@ import { getAccessToken, apiFetch } from "../services/api";
 function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
   void _isLive;
   const [watchlist, setWatchlist] = useState<string[]>([]);
-  const watchlistInitialized = useRef(false);
   const [allSymbols, setAllSymbols] = useState<Array<{ symbol: string; description: string }>>([]);
   const [marketData, setMarketData] = useState<Record<string, MarketDataPoint>>({});
   const [addInput, setAddInput] = useState("");
@@ -37,47 +36,41 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     return data;
   }, [watchlist, marketData, sessionHighLow]);
 
-  // FIX 3+4: Load symbols with AbortController and error logging
+  // Load symbols + prices together, then resolve watchlist using live price data
   useEffect(() => {
     const controller = new AbortController();
-    apiFetch("/api/market/symbols", { signal: controller.signal })
-      .then(r => r.ok ? r.json() : [])
-      .then((syms: Array<{ symbol: string; description: string }>) => {
+    (async () => {
+      try {
+        const [symsRes, pricesRes] = await Promise.all([
+          apiFetch("/api/market/symbols", { signal: controller.signal }),
+          apiFetch("/api/market/prices", { signal: controller.signal }),
+        ]);
+        const syms: Array<{ symbol: string; description: string }> = symsRes.ok ? await symsRes.json() : [];
+        const pricesArr: Array<{ symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number; digits: number }> = pricesRes.ok ? await pricesRes.json() : [];
+
         setAllSymbols(syms);
-        // Resolve default watchlist to match this server's symbol naming convention
-        if (!watchlistInitialized.current && syms.length > 0) {
-          watchlistInitialized.current = true;
-          const resolved = resolveWatchlist(DEFAULT_WATCHLIST_BASES, syms);
+
+        // Build price lookup for resolver
+        const priceLookup: Record<string, { bid: number }> = {};
+        const newMarketData: Record<string, MarketDataPoint> = {};
+        for (const p of pricesArr) {
+          priceLookup[p.symbol] = { bid: p.bid };
+          if (p.bid > 0) {
+            newMarketData[p.symbol] = { symbol: p.symbol, bid: p.bid, ask: p.ask, spread: p.spread, change24h: p.changePercent, digits: p.digits ?? 5 };
+          }
+        }
+        setMarketData(prev => ({ ...prev, ...newMarketData }));
+
+        // Resolve watchlist using live prices to pick symbols with actual feeds
+        if (syms.length > 0) {
+          const resolved = resolveWatchlist(DEFAULT_WATCHLIST_BASES, syms, priceLookup);
           setWatchlist(resolved);
         }
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("[MarketWatch] symbols fetch failed:", err);
-      });
-    return () => controller.abort();
-  }, []);
-
-  // FIX 3+4: Initial price snapshot
-  useEffect(() => {
-    const controller = new AbortController();
-    apiFetch("/api/market/prices", { signal: controller.signal })
-      .then(r => r.ok ? r.json() : [])
-      .then((prices: Array<{ symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number; digits: number }>) => {
-        setMarketData(prev => {
-          const next = { ...prev };
-          for (const p of prices) {
-            if (p.bid > 0) {
-              next[p.symbol] = { symbol: p.symbol, bid: p.bid, ask: p.ask, spread: p.spread, change24h: p.changePercent, digits: p.digits ?? 5 };
-            }
-          }
-          return next;
-        });
-      })
-      .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("[MarketWatch] prices fetch failed:", err);
-      });
+        console.error("[MarketWatch] init fetch failed:", err);
+      }
+    })();
     return () => controller.abort();
   }, []);
 

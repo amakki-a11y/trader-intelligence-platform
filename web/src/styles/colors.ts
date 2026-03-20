@@ -24,28 +24,62 @@ export const DEFAULT_WATCHLIST_BASES = [
 
 /**
  * Resolves base symbol names to the best matching symbols available on the server.
- * Priority: exact match → dash suffix (EURUSD-) → shortest name starting with base.
+ * Uses live price data to pick symbols that actually have feeds.
+ *
+ * Priority when prices available:
+ *   Pick the variant with a live price feed (bid > 0), preferring shortest name.
+ *
+ * Priority without prices (fallback):
+ *   .m suffix → dash suffix → exact match → shortest candidate
+ *
+ * Common server patterns:
+ *   EURUSD (no feed), EURUSD- (feed), EURUSD.m (feed), EURUSD.e, EURUSD.s
  */
 export function resolveWatchlist(
   bases: string[],
-  available: Array<{ symbol: string }>
+  available: Array<{ symbol: string }>,
+  prices?: Record<string, { bid: number }>
 ): string[] {
-  const availSet = new Set(available.map(s => s.symbol));
   const resolved: string[] = [];
 
   for (const base of bases) {
-    // 1. Exact match
-    if (availSet.has(base)) { resolved.push(base); continue; }
-    // 2. Dash suffix (old server convention)
-    if (availSet.has(base + "-")) { resolved.push(base + "-"); continue; }
-    // 3. Shortest symbol starting with base (prefer no dot/hash suffix)
+    // Find all candidates that start with the base name
     const candidates = available
       .map(s => s.symbol)
-      .filter(s => s.startsWith(base) && !s.includes("#") && !s.includes("_"))
-      .sort((a, b) => a.length - b.length);
-    if (candidates.length > 0 && candidates[0] !== undefined) { resolved.push(candidates[0]); continue; }
-    // 4. Fallback: keep the base name (will show "No feed")
-    resolved.push(base);
+      .filter(s => s.startsWith(base) && !s.includes("#") && !s.includes("_"));
+
+    if (candidates.length === 0) {
+      resolved.push(base); // fallback: keep base name
+      continue;
+    }
+
+    // If we have price data, prefer symbols with live feeds
+    if (prices) {
+      const withFeed = candidates.filter(s => {
+        const p = prices[s];
+        return p !== undefined && p.bid > 0;
+      });
+      if (withFeed.length > 0) {
+        // Prefer shortest name among those with feed
+        withFeed.sort((a, b) => a.length - b.length);
+        resolved.push(withFeed[0]!);
+        continue;
+      }
+    }
+
+    // No price data available — use suffix priority
+    const dotM = candidates.find(s => s === base + ".m");
+    if (dotM) { resolved.push(dotM); continue; }
+
+    const dash = candidates.find(s => s === base + "-");
+    if (dash) { resolved.push(dash); continue; }
+
+    const exact = candidates.find(s => s === base);
+    if (exact) { resolved.push(exact); continue; }
+
+    // Shortest candidate
+    candidates.sort((a, b) => a.length - b.length);
+    resolved.push(candidates[0]!);
   }
 
   return resolved;
