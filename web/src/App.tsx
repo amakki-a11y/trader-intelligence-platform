@@ -15,14 +15,11 @@ import ThreatView from "./components/ThreatView";
 import SettingsView from "./components/SettingsView";
 import LoginPage from "./components/LoginPage";
 import ChangePasswordPage from "./components/ChangePasswordPage";
-import UserManagement from "./components/admin/UserManagement";
-import ServerManagement from "./components/admin/ServerManagement";
-import RolesView from "./components/admin/RolesView";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { apiFetch } from "./services/api";
 
 function AppContent() {
-  const { user, isAuthenticated, isLoading, logout, hasPermission } = useAuth();
+  const { user, isAuthenticated, isLoading, logout } = useAuth();
   const [view, setView] = useState("market");
   const [version, setVersion] = useState("v1");
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
@@ -145,10 +142,6 @@ function AppContent() {
             {view === "market" && <ErrorBoundary name="MarketWatch"><MarketWatch isLive={isLive} /></ErrorBoundary>}
             {view === "threats" && <ErrorBoundary name="ThreatView"><ThreatView accounts={accounts} version={version} onSelect={handleSelect} /></ErrorBoundary>}
             {view === "settings" && <ErrorBoundary name="Settings"><SettingsView connectionStatus={connectionStatus} /></ErrorBoundary>}
-            {view === "admin-users" && hasPermission("admin.users") && <ErrorBoundary name="UserMgmt"><UserManagement /></ErrorBoundary>}
-            {view === "admin-servers" && hasPermission("admin.servers") && <ErrorBoundary name="ServerMgmt"><ServerManagement /></ErrorBoundary>}
-            {view === "admin-roles" && hasPermission("admin.users") && <ErrorBoundary name="Roles"><RolesView /></ErrorBoundary>}
-            {view === "change-password" && <ErrorBoundary name="ChangePwd"><ChangePasswordPage /></ErrorBoundary>}
           </>
         )}
         <div style={{

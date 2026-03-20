@@ -32,8 +32,6 @@ function TopBar({ view, accounts, version, isLive, onToggleLive, onScan, scannin
   const titles: Record<string, string> = {
     grid: "Account Scanner", live: "Live Monitor", market: "Market Watch",
     threats: "Threat Intelligence", settings: "Settings",
-    "admin-users": "User Management", "admin-servers": "MT5 Servers",
-    "admin-roles": "Roles & Permissions", "change-password": "Change Password",
   };
   return (
     <div style={{
