@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using TIP.Connector;
 using TIP.Core.Engines;
 
 namespace TIP.Api.Controllers;
@@ -11,12 +13,13 @@ namespace TIP.Api.Controllers;
 /// REST API for real-time market data from the MT5 price feed.
 ///
 /// Design rationale:
-/// - Prices come exclusively from PriceCache, which is populated by live CIMTTickSink ticks.
-/// - No TickLast/TickStat polling — stale data and heavy MT5 API load eliminated.
+/// - Prices come from PriceCache (populated by live CIMTTickSink ticks) for bid/ask/spread.
+/// - Session high/low comes from MT5 TickStat API for accurate full-session data.
 /// - SymbolCache provides symbol metadata (digits, description) loaded once on startup.
 /// - GET /api/market/prices: initial snapshot for dashboard page load; WebSocket takes over after.
 /// - GET /api/market/symbols: reads from SymbolCache (no per-request MT5 calls).
 /// - GET /api/market/volume: aggregates open position buy/sell/net per symbol.
+/// - GET /api/market/session-stats: MT5 TickStat session high/low for watchlist symbols.
 /// </summary>
 [ApiController]
 [Route("api/market")]
@@ -27,6 +30,7 @@ public sealed class MarketController : ControllerBase
     private readonly SymbolCache _symbolCache;
     private readonly ExposureEngine _exposureEngine;
     private readonly PnLEngine _pnlEngine;
+    private readonly IMT5Api _mt5Api;
     private readonly ILogger<MarketController> _logger;
 
     /// <summary>
@@ -37,12 +41,14 @@ public sealed class MarketController : ControllerBase
         SymbolCache symbolCache,
         ExposureEngine exposureEngine,
         PnLEngine pnlEngine,
+        IMT5Api mt5Api,
         ILogger<MarketController> logger)
     {
         _priceCache = priceCache;
         _symbolCache = symbolCache;
         _exposureEngine = exposureEngine;
         _pnlEngine = pnlEngine;
+        _mt5Api = mt5Api;
         _logger = logger;
     }
 
@@ -134,6 +140,48 @@ public sealed class MarketController : ControllerBase
             .ToList();
 
         return Ok(bySymbol);
+    }
+
+    /// <summary>
+    /// Gets MT5 session statistics (high/low/open/close) for specified symbols via TickStat API.
+    /// This calls MT5 directly (not cache) for accurate full-session data.
+    /// Used by MarketWatch ADVANCED mode for real session high/low.
+    /// </summary>
+    [HttpGet("session-stats")]
+    public IActionResult GetSessionStats([FromQuery] string? symbols = null)
+    {
+        if (string.IsNullOrWhiteSpace(symbols))
+        {
+            return BadRequest(new { error = "symbols query parameter required (comma-separated)" });
+        }
+
+        if (!_mt5Api.IsConnected)
+        {
+            return Ok(new List<object>());
+        }
+
+        var symbolList = symbols.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var result = new List<object>();
+
+        foreach (var sym in symbolList)
+        {
+            var stat = _mt5Api.GetTickStat(sym);
+            if (stat != null)
+            {
+                result.Add(new
+                {
+                    symbol = sym,
+                    high = stat.High,
+                    low = stat.Low,
+                    bid = stat.Bid,
+                    ask = stat.Ask,
+                    last = stat.Last,
+                    digits = _symbolCache.GetDigits(sym)
+                });
+            }
+        }
+
+        return Ok(result);
     }
 
     /// <summary>

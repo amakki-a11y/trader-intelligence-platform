@@ -89,7 +89,7 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     });
   }, []);
 
-  // FIX 3+5: Volume + session high/low periodic fetch with cleanup
+  // Volume periodic fetch
   useEffect(() => {
     const controller = new AbortController();
     const fetchVolume = async () => {
@@ -107,27 +107,35 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
         console.error("[MarketWatch] volume fetch failed:", err);
       }
     };
+    fetchVolume();
+    const volumeInterval = setInterval(fetchVolume, 5000);
+    return () => { clearInterval(volumeInterval); controller.abort(); };
+  }, []);
+
+  // Session high/low from MT5 TickStat API (real session data, not backend-calculated)
+  useEffect(() => {
+    if (watchlist.length === 0) return;
+    const controller = new AbortController();
     const fetchSessionHL = async () => {
       try {
-        const res = await apiFetch("/api/market/prices", { signal: controller.signal });
+        const syms = watchlist.join(",");
+        const res = await apiFetch(`/api/market/session-stats?symbols=${encodeURIComponent(syms)}`, { signal: controller.signal });
         if (!res.ok) return;
-        const prices = await res.json() as Array<{ symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number; sessionHighBid: number; sessionLowBid: number }>;
+        const stats = await res.json() as Array<{ symbol: string; high: number; low: number; bid: number; ask: number }>;
         const hl: Record<string, { high: number; low: number }> = {};
-        for (const p of prices) {
-          if (p.sessionHighBid > 0) hl[p.symbol] = { high: p.sessionHighBid, low: p.sessionLowBid };
+        for (const s of stats) {
+          if (s.high > 0) hl[s.symbol] = { high: s.high, low: s.low };
         }
         setSessionHighLow(hl);
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("[MarketWatch] session HL fetch failed:", err);
+        console.error("[MarketWatch] session stats fetch failed:", err);
       }
     };
-    fetchVolume();
     fetchSessionHL();
     const hlInterval = setInterval(fetchSessionHL, 5000);
-    const volumeInterval = setInterval(fetchVolume, 5000);
-    return () => { clearInterval(hlInterval); clearInterval(volumeInterval); controller.abort(); };
-  }, []);
+    return () => { clearInterval(hlInterval); controller.abort(); };
+  }, [watchlist]);
 
   // FIX 2+5: WebSocket with exponential backoff and full cleanup
   useEffect(() => {
