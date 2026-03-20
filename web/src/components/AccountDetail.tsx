@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import C, { sevColor } from "../styles/colors";
 import type { Account, Deal, OpenTrade, MoneyOp } from "../store/TipStore";
 import type { DealResponse, PositionResponse } from "../types/api";
+import { apiFetch } from "../services/api";
 import { parseDeal } from "../utils/parsers";
 import type { RawDealResponse } from "../utils/parsers";
 import AIRoutingPanel from "./AIRoutingPanel";
@@ -60,7 +61,7 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
   // FIX 3+4: Fetch live account info from MT5 with AbortController and error handling
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`/api/accounts/${account.login}/info`, { signal: controller.signal })
+    apiFetch(`/api/accounts/${account.login}/info`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
         const data = d as Record<string, unknown>;
@@ -84,7 +85,7 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
   useEffect(() => {
     const controller = new AbortController();
     setFetchError(null);
-    fetch(`/api/accounts/${account.login}/deals?from=${dateFrom}&to=${dateTo}`, { signal: controller.signal })
+    apiFetch(`/api/accounts/${account.login}/deals?from=${dateFrom}&to=${dateTo}`, { signal: controller.signal })
       .then(r => r.json())
       .then((data: DealResponse[]) => {
         if (!Array.isArray(data)) return;
@@ -105,7 +106,7 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
     const controller = new AbortController();
     const fetchPositions = async () => {
       try {
-        const res = await fetch(`/api/accounts/${account.login}/positions`, { signal: controller.signal });
+        const res = await apiFetch(`/api/accounts/${account.login}/positions`, { signal: controller.signal });
         if (!res.ok) return;
         const data = await res.json();
         if (!Array.isArray(data)) return;

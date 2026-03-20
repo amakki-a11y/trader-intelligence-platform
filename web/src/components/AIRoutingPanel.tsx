@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import C from "../styles/colors";
+import { apiFetch } from "../services/api";
 
 interface AIProfile {
   login: number; name: string; group: string;
@@ -31,8 +32,8 @@ function AIRoutingPanel({ login }: { login: number }) {
     setError(null);
     const controller = new AbortController();
     Promise.all([
-      fetch(`/api/intelligence/profiles/${login}`, { signal: controller.signal }).then(r => r.ok ? r.json() : null),
-      fetch(`/api/intelligence/profiles/${login}/simulate`, { signal: controller.signal }).then(r => r.ok ? r.json() : null),
+      apiFetch(`/api/intelligence/profiles/${login}`, { signal: controller.signal }).then(r => r.ok ? r.json() : null),
+      apiFetch(`/api/intelligence/profiles/${login}/simulate`, { signal: controller.signal }).then(r => r.ok ? r.json() : null),
     ]).then(([p, s]) => {
       setProfile(p as AIProfile | null);
       setSim(s as SimComparison | null);

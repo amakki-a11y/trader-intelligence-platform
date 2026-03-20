@@ -1,7 +1,7 @@
 import { Fragment, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import C, { DEFAULT_WATCHLIST_BASES, resolveWatchlist } from "../styles/colors";
 import type { MarketDataPoint, VolumeData } from "../store/TipStore";
-import { getAccessToken } from "../services/api";
+import { getAccessToken, apiFetch } from "../services/api";
 
 function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
   void _isLive;
@@ -40,7 +40,7 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
   // FIX 3+4: Load symbols with AbortController and error logging
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/market/symbols", { signal: controller.signal })
+    apiFetch("/api/market/symbols", { signal: controller.signal })
       .then(r => r.ok ? r.json() : [])
       .then((syms: Array<{ symbol: string; description: string }>) => {
         setAllSymbols(syms);
@@ -61,7 +61,7 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
   // FIX 3+4: Initial price snapshot
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/market/prices", { signal: controller.signal })
+    apiFetch("/api/market/prices", { signal: controller.signal })
       .then(r => r.ok ? r.json() : [])
       .then((prices: Array<{ symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number; digits: number }>) => {
         setMarketData(prev => {
@@ -101,7 +101,7 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     const controller = new AbortController();
     const fetchVolume = async () => {
       try {
-        const res = await fetch("/api/market/volume", { signal: controller.signal });
+        const res = await apiFetch("/api/market/volume", { signal: controller.signal });
         if (!res.ok) return;
         const data = await res.json() as Array<{ symbol: string; buyVolume: number; sellVolume: number; netVolume: number; topBuyer: { login: number; volume: number }; topSeller: { login: number; volume: number } }>;
         const vols: Record<string, VolumeData> = {};
@@ -116,7 +116,7 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     };
     const fetchSessionHL = async () => {
       try {
-        const res = await fetch("/api/market/prices", { signal: controller.signal });
+        const res = await apiFetch("/api/market/prices", { signal: controller.signal });
         if (!res.ok) return;
         const prices = await res.json() as Array<{ symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number; sessionHighBid: number; sessionLowBid: number }>;
         const hl: Record<string, { high: number; low: number }> = {};

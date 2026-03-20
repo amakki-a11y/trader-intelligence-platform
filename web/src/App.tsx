@@ -135,10 +135,18 @@ function AppContent() {
           <ErrorBoundary name="AccountDetail"><AccountDetail account={selectedAccount} version={version} onBack={() => setSelectedAccount(null)} /></ErrorBoundary>
         ) : (
           <>
-            {view === "grid" && <ErrorBoundary name="AbuseGrid"><AbuseGrid accounts={accounts} version={version} onSelect={handleSelect} flashRows={flashRows} /></ErrorBoundary>}
-            {view === "live" && <ErrorBoundary name="LiveMonitor"><LiveMonitor accounts={accounts} isLive={isLive} onSelect={handleSelect} /></ErrorBoundary>}
-            {view === "market" && <ErrorBoundary name="MarketWatch"><MarketWatch isLive={isLive} /></ErrorBoundary>}
-            {view === "threats" && <ErrorBoundary name="ThreatView"><ThreatView accounts={accounts} version={version} onSelect={handleSelect} /></ErrorBoundary>}
+            <div style={{ display: view === "market" ? "flex" : "none", flex: 1, flexDirection: "column", overflow: "hidden" }}>
+              <ErrorBoundary name="MarketWatch"><MarketWatch isLive={isLive} /></ErrorBoundary>
+            </div>
+            <div style={{ display: view === "grid" ? "contents" : "none" }}>
+              <ErrorBoundary name="AbuseGrid"><AbuseGrid accounts={accounts} version={version} onSelect={handleSelect} flashRows={flashRows} /></ErrorBoundary>
+            </div>
+            <div style={{ display: view === "live" ? "contents" : "none" }}>
+              <ErrorBoundary name="LiveMonitor"><LiveMonitor accounts={accounts} isLive={isLive} onSelect={handleSelect} /></ErrorBoundary>
+            </div>
+            <div style={{ display: view === "threats" ? "contents" : "none" }}>
+              <ErrorBoundary name="ThreatView"><ThreatView accounts={accounts} version={version} onSelect={handleSelect} /></ErrorBoundary>
+            </div>
             {view === "settings" && <ErrorBoundary name="Settings"><SettingsView connectionStatus={connectionStatus} /></ErrorBoundary>}
           </>
         )}

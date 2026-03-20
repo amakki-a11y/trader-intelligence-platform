@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import C, { sevColor } from "../styles/colors";
 import type { Account, LiveEvent } from "../store/TipStore";
 import { parseDealToLiveEvent, parseWsDealToLiveEvent } from "../utils/parsers";
-import { getAccessToken } from "../services/api";
+import { getAccessToken, apiFetch } from "../services/api";
 import type { RawDealResponse } from "../utils/parsers";
 
 /** Escape special regex characters in user input for safe use in RegExp/filter. */
@@ -80,14 +80,14 @@ function LiveMonitor({ accounts, isLive, onSelect }: LiveMonitorProps) {
     const loadRecent = async () => {
       try {
         const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        const acctRes = await fetch("/api/accounts", { signal: controller.signal });
+        const acctRes = await apiFetch("/api/accounts", { signal: controller.signal });
         if (!acctRes.ok) return;
         const acctList = await acctRes.json() as Array<Record<string, unknown>>;
         if (!Array.isArray(acctList)) return;
         const allDeals: LiveEvent[] = [];
         for (const acc of acctList) {
           try {
-            const res = await fetch(`/api/accounts/${acc.login}/deals?from=${from}`, { signal: controller.signal });
+            const res = await apiFetch(`/api/accounts/${acc.login}/deals?from=${from}`, { signal: controller.signal });
             if (!res.ok) continue;
             const data = await res.json() as RawDealResponse[];
             if (!Array.isArray(data)) continue;
