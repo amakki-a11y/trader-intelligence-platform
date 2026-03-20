@@ -134,7 +134,30 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
     return () => controller.abort();
   }, [account.login]);
 
-  // WebSocket for live position P&L updates (instant, no polling)
+  // Refetch positions from REST (used after deal events for accurate state)
+  const refetchPositions = async () => {
+    try {
+      const res = await apiFetch(`/api/accounts/${account.login}/positions`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!Array.isArray(data)) return;
+      setOpenTrades(data.map((p: PositionResponse) => ({
+        ticket: p.positionId,
+        time: p.time,
+        symbol: p.symbol ?? "",
+        action: p.action ?? "BUY",
+        volume: p.volume ?? 0,
+        openPrice: p.priceOpen ?? 0,
+        currentPrice: p.priceCurrent ?? 0,
+        profit: p.profit ?? 0,
+        swap: p.swap ?? 0,
+        sl: p.sl ?? 0,
+        tp: p.tp ?? 0,
+      })));
+    } catch { /* ignore */ }
+  };
+
+  // WebSocket for live position P&L + deal events (close/partial close)
   useEffect(() => {
     let ws: WebSocket;
     let reconnectTimer: ReturnType<typeof setTimeout>;
@@ -149,26 +172,34 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
 
       ws.onopen = () => {
         attempt = 0;
-        ws.send(JSON.stringify({ subscribe: ["positions"] }));
+        // Subscribe to positions (live P&L) and deals (open/close events)
+        ws.send(JSON.stringify({ subscribe: ["positions", "deals"] }));
       };
 
       ws.onmessage = (ev) => {
         try {
-          const msg = JSON.parse(ev.data) as {
-            type: string;
-            data: { positionId: number; login: number; symbol: string; direction: number; volume: number; openPrice: number; currentPrice: number; unrealizedPnl: number; swap: number };
-          };
-          if (msg.type === "positions" && msg.data && msg.data.login === account.login) {
-            const p = msg.data;
+          const msg = JSON.parse(ev.data) as { type: string; data: Record<string, unknown> };
+
+          // Live P&L updates for existing/new positions
+          if (msg.type === "positions") {
+            const p = msg.data as { positionId: number; login: number; symbol: string; direction: number; volume: number; openPrice: number; currentPrice: number; unrealizedPnl: number; swap: number };
+            if (p.login !== account.login) return;
+
             setOpenTrades(prev => {
               const idx = prev.findIndex(t => t.ticket === p.positionId);
               if (idx >= 0) {
-                // Update existing position P&L in-place
+                // Update existing — P&L, current price, volume (handles partial close)
                 const updated = [...prev];
-                updated[idx] = { ...updated[idx]!, currentPrice: p.currentPrice, profit: p.unrealizedPnl, swap: p.swap };
+                updated[idx] = {
+                  ...updated[idx]!,
+                  volume: p.volume,
+                  currentPrice: p.currentPrice,
+                  profit: p.unrealizedPnl,
+                  swap: p.swap,
+                };
                 return updated;
               }
-              // New position — add it to the list
+              // New position — add it
               return [...prev, {
                 ticket: p.positionId,
                 time: new Date().toISOString(),
@@ -183,6 +214,15 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
                 tp: 0,
               }];
             });
+          }
+
+          // Deal events — on close/partial close, refetch positions for accurate state
+          if (msg.type === "deals") {
+            const d = msg.data as { login: number; entry: string };
+            if (d.login === account.login && (d.entry === "Out" || d.entry === "OutBy" || d.entry === "Close" || d.entry === "Close By")) {
+              // Small delay to let PnLEngine process the close
+              setTimeout(() => refetchPositions(), 300);
+            }
           }
         } catch { /* ignore parse errors */ }
       };
@@ -202,6 +242,7 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
       ws?.close();
       wsRef.current = null;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account.login]);
 
   const moneyOps = useMemo((): MoneyOp[] => {
