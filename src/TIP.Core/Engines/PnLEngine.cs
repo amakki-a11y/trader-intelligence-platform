@@ -163,6 +163,30 @@ public sealed class PnLEngine
     }
 
     /// <summary>
+    /// Update volume for a position after a partial close.
+    /// </summary>
+    /// <param name="positionId">Position ticket to update.</param>
+    /// <param name="symbol">Symbol the position is on.</param>
+    /// <param name="newVolume">Remaining volume after partial close.</param>
+    public void OnPositionModified(long positionId, string symbol, double newVolume)
+    {
+        lock (_positionLock)
+        {
+            if (_positionsBySymbol.TryGetValue(symbol, out var list))
+            {
+                var pos = list.Find(p => p.PositionId == positionId);
+                if (pos != null)
+                {
+                    var oldVol = pos.Volume;
+                    pos.Volume = newVolume;
+                    _logger.LogDebug("PnL position {PositionId} volume updated: {OldVol} → {NewVol}",
+                        positionId, oldVol, newVolume);
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Remove a position from the cache when it is closed.
     /// </summary>
     /// <param name="positionId">Position ticket to remove.</param>

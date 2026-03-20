@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -34,8 +33,6 @@ public sealed class PnLEngineService : BackgroundService
     private readonly PriceCache _priceCache;
     private readonly SymbolCache _symbolCache;
     private readonly ServiceHealthTracker _healthTracker;
-    private readonly IMT5Api _mt5Api;
-    private readonly ConnectionManager _connectionManager;
     private readonly ConcurrentDictionary<string, double> _firstBid = new();
     private long _ticksProcessed;
 
@@ -51,9 +48,7 @@ public sealed class PnLEngineService : BackgroundService
         IWebSocketBroadcaster broadcaster,
         PriceCache priceCache,
         SymbolCache symbolCache,
-        ServiceHealthTracker healthTracker,
-        IMT5Api mt5Api,
-        ConnectionManager connectionManager)
+        ServiceHealthTracker healthTracker)
     {
         _logger = logger;
         _tickReader = tickReader;
@@ -64,8 +59,6 @@ public sealed class PnLEngineService : BackgroundService
         _priceCache = priceCache;
         _symbolCache = symbolCache;
         _healthTracker = healthTracker;
-        _mt5Api = mt5Api;
-        _connectionManager = connectionManager;
     }
 
     /// <summary>
@@ -134,13 +127,13 @@ public sealed class PnLEngineService : BackgroundService
     }
 
     /// <summary>
-    /// Broadcasts live position P&amp;L updates every 500ms, refreshes positions from MT5
-    /// every 30s, and logs stats every 60 seconds.
+    /// Broadcasts live position P&amp;L updates every 500ms and logs stats every 60 seconds.
+    /// Position data stays accurate via deal events (open/close/partial close) processed
+    /// by ComputeEngineService → PnLEngine. No MT5 polling needed.
     /// </summary>
     private async Task LogStatsAsync(CancellationToken ct)
     {
         var lastStatsLog = DateTimeOffset.UtcNow;
-        var lastPositionRefresh = DateTimeOffset.UtcNow;
 
         while (!ct.IsCancellationRequested)
         {
@@ -158,14 +151,6 @@ public sealed class PnLEngineService : BackgroundService
                         pnl.CurrentPrice, pnl.UnrealizedPnL, pnl.Swap)).ConfigureAwait(false);
                 }
 
-                // Refresh positions from MT5 every 30 seconds to fix stale data
-                // (handles partial closes, volume changes, positions opened/closed outside deal events)
-                if ((DateTimeOffset.UtcNow - lastPositionRefresh).TotalSeconds >= 30)
-                {
-                    lastPositionRefresh = DateTimeOffset.UtcNow;
-                    RefreshPositionsFromMT5();
-                }
-
                 // Log stats + recalculate exposure every 60 seconds
                 if ((DateTimeOffset.UtcNow - lastStatsLog).TotalSeconds >= 60)
                 {
@@ -181,53 +166,6 @@ public sealed class PnLEngineService : BackgroundService
             {
                 break;
             }
-        }
-    }
-
-    /// <summary>
-    /// Refreshes PnLEngine position cache from MT5 GetPositions API.
-    /// Runs as a backend task every 30s — ensures positions are accurate
-    /// (handles partial closes, volume changes, external modifications).
-    /// </summary>
-    private void RefreshPositionsFromMT5()
-    {
-        try
-        {
-            if (!_mt5Api.IsConnected) return;
-
-            var groupMask = _connectionManager.CurrentConfig.GroupMask;
-            var logins = _mt5Api.GetUserLogins(groupMask);
-            var positions = new List<OpenPosition>();
-
-            foreach (var login in logins)
-            {
-                try
-                {
-                    var rawPositions = _mt5Api.GetPositions(login);
-                    foreach (var rp in rawPositions)
-                    {
-                        positions.Add(new OpenPosition
-                        {
-                            PositionId = (long)rp.PositionId,
-                            Login = rp.Login,
-                            Symbol = rp.Symbol,
-                            Direction = (int)rp.Action,
-                            Volume = rp.Volume,
-                            OpenPrice = rp.PriceOpen,
-                        });
-                    }
-                }
-                catch { /* skip logins without positions */ }
-            }
-
-            _pnlEngine.Initialize(positions);
-
-            _logger.LogDebug("Position refresh: {Count} positions from {Logins} logins",
-                positions.Count, logins.Length);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to refresh positions from MT5");
         }
     }
 }

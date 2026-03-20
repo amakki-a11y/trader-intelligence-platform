@@ -162,7 +162,8 @@ public sealed class DealProcessor
                         DealId = dealId,
                         Type = dealType,
                         PositionEffect = PositionAction.Modified,
-                        AffectedPositionId = positionId
+                        AffectedPositionId = positionId,
+                        RemainingVolume = remainingVolume
                     };
                 }
             }
@@ -230,6 +231,9 @@ public sealed record DealProcessingResult
 
     /// <summary>The position ticket affected, or null for non-trade deals.</summary>
     public ulong? AffectedPositionId { get; init; }
+
+    /// <summary>Remaining volume after partial close, or null if not a partial close.</summary>
+    public double? RemainingVolume { get; init; }
 }
 
 /// <summary>

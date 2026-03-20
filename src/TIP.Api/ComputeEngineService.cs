@@ -223,6 +223,10 @@ public sealed class ComputeEngineService : BackgroundService
         {
             _pnlEngine.OnPositionClosed((long)result.AffectedPositionId.Value, deal.Symbol);
         }
+        else if (result.PositionEffect == PositionAction.Modified && result.AffectedPositionId.HasValue && result.RemainingVolume.HasValue)
+        {
+            _pnlEngine.OnPositionModified((long)result.AffectedPositionId.Value, deal.Symbol, result.RemainingVolume.Value);
+        }
 
         // Step 5: Recalculate exposure on position changes
         if (result.PositionEffect == PositionAction.Opened ||
