@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import type { CSSProperties } from "react";
 import C, { sevColor } from "../styles/colors";
 import type { Account, Deal, OpenTrade, MoneyOp } from "../store/TipStore";
 import type { DealResponse, PositionResponse } from "../types/api";
-import { apiFetch } from "../services/api";
+import { apiFetch, getAccessToken } from "../services/api";
 import { parseDeal } from "../utils/parsers";
 import type { RawDealResponse } from "../utils/parsers";
 import AIRoutingPanel from "./AIRoutingPanel";
@@ -102,11 +102,12 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
   }, [account.login, loadTrigger]);
 
   const [openTrades, setOpenTrades] = useState<OpenTrade[]>([]);
+  const wsRef = useRef<WebSocket | null>(null);
 
-  // FIX 3+4+5: Fetch open positions with AbortController and cleanup
+  // Initial position load from REST API
   useEffect(() => {
     const controller = new AbortController();
-    const fetchPositions = async () => {
+    (async () => {
       try {
         const res = await apiFetch(`/api/accounts/${account.login}/positions`, { signal: controller.signal });
         if (!res.ok) return;
@@ -129,10 +130,65 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("[AccountDetail] positions fetch failed:", err);
       }
+    })();
+    return () => controller.abort();
+  }, [account.login]);
+
+  // WebSocket for live position P&L updates (instant, no polling)
+  useEffect(() => {
+    let ws: WebSocket;
+    let reconnectTimer: ReturnType<typeof setTimeout>;
+    let attempt = 0;
+
+    const connect = () => {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const token = getAccessToken();
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+      ws = new WebSocket(`${proto}//${window.location.host}/ws${tokenParam}`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        attempt = 0;
+        ws.send(JSON.stringify({ subscribe: ["positions"] }));
+      };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data) as {
+            type: string;
+            data: { positionId: number; login: number; symbol: string; direction: number; volume: number; openPrice: number; currentPrice: number; unrealizedPnl: number; swap: number };
+          };
+          if (msg.type === "positions" && msg.data && msg.data.login === account.login) {
+            const p = msg.data;
+            setOpenTrades(prev => {
+              const idx = prev.findIndex(t => t.ticket === p.positionId);
+              if (idx >= 0) {
+                // Update existing position P&L in-place
+                const updated = [...prev];
+                updated[idx] = { ...updated[idx]!, currentPrice: p.currentPrice, profit: p.unrealizedPnl, swap: p.swap };
+                return updated;
+              }
+              return prev;
+            });
+          }
+        } catch { /* ignore parse errors */ }
+      };
+
+      ws.onclose = () => {
+        wsRef.current = null;
+        const delay = Math.min(1000 * Math.pow(2, attempt), 15000);
+        attempt++;
+        reconnectTimer = setTimeout(connect, delay);
+      };
+      ws.onerror = () => ws.close();
     };
-    fetchPositions();
-    const interval = setInterval(fetchPositions, 2000);
-    return () => { clearInterval(interval); controller.abort(); };
+
+    connect();
+    return () => {
+      clearTimeout(reconnectTimer);
+      ws?.close();
+      wsRef.current = null;
+    };
   }, [account.login]);
 
   const moneyOps = useMemo((): MoneyOp[] => {
@@ -224,29 +280,46 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
           </div>
         )}
       </div>
-      {/* Date range */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-        <span style={{ fontSize: 10, color: C.t3, textTransform: "uppercase", fontWeight: 600, letterSpacing: "0.5px" }}>Request Data</span>
+      {/* Stats date range */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <span style={{ fontSize: 10, color: C.t3, textTransform: "uppercase", fontWeight: 600, letterSpacing: "0.5px" }}>Statistics</span>
         <span style={{ fontSize: 10, color: C.t3 }}>From</span>
         <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={dateInputStyle} />
         <span style={{ fontSize: 10, color: C.t3 }}>Till</span>
         <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={dateInputStyle} />
         <button onClick={() => setLoadTrigger(n => n + 1)} style={{ padding: "4px 12px", borderRadius: 5, border: `1px solid ${C.teal}40`, background: C.tealBg, color: C.teal, fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono',monospace", cursor: "pointer" }}>LOAD</button>
+        <span style={{ fontSize: 9, color: C.t3, fontStyle: "italic" }}>Applies to stats &amp; history</span>
       </div>
-      {/* Stats cards */}
+      {/* Stats cards — computed from loaded deals for the selected date range */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginBottom: 20 }}>
-        {[
-          { label: "Trades", val: String(account.tradeCount), color: C.t1 },
-          { label: "Volume", val: account.volume.toLocaleString() + " lots", color: C.t1 },
-          { label: "Commissions", val: "$" + account.commissions.toLocaleString(), color: C.amber },
-          { label: "Net P&L", val: (account.pnl >= 0 ? "+" : "") + "$" + account.pnl.toLocaleString(), color: account.pnl >= 0 ? C.green : C.red },
-          { label: "Deposits", val: account.deposits + "\u00D7 ($" + account.totalDeposited.toLocaleString() + ")", color: C.t1 },
-          { label: "Bonuses", val: "$" + account.bonuses.toLocaleString(), color: C.amber },
-          { label: "EA Trade %", val: (account.expertRatio * 100).toFixed(0) + "%", color: account.expertRatio > 0.8 ? C.coral : C.t1 },
-          { label: "Avg Hold", val: account.avgHoldSec < 60 ? account.avgHoldSec + "s" : Math.round(account.avgHoldSec / 60) + "m", color: account.avgHoldSec < 30 ? C.red : C.t1 },
-          { label: "Win Rate", val: (account.winRate * 100).toFixed(0) + "%", color: C.t1 },
-          { label: "Timing CV", val: account.timingCV.toFixed(2), color: account.timingCV < 0.15 ? C.red : C.t1 },
-        ].map(({ label, val, color }) => (
+        {(() => {
+          // Compute stats from deals within the loaded date range
+          const tradingDeals = deals.filter(d => !["BALANCE", "CREDIT", "BONUS"].includes(d.action));
+          const closingDeals = tradingDeals.filter(d => d.entry === "Close" || d.entry === "Close By");
+          const tradeCount = closingDeals.length;
+          const totalVolume = tradingDeals.reduce((s, d) => s + d.volume, 0);
+          const totalComm = tradingDeals.reduce((s, d) => s + d.commission, 0);
+          const netPnl = closingDeals.reduce((s, d) => s + d.profit, 0);
+          const depositOps = deals.filter(d => d.action === "BALANCE" && d.profit > 0);
+          const totalDeposited = depositOps.reduce((s, d) => s + d.profit, 0);
+          const bonusDeals = deals.filter(d => d.action === "BONUS" || d.action === "CREDIT");
+          const totalBonuses = bonusDeals.reduce((s, d) => s + Math.abs(d.profit), 0);
+          const eaDeals = tradingDeals.filter(d => d.expertId && d.expertId > 0);
+          const eaRatio = tradingDeals.length > 0 ? eaDeals.length / tradingDeals.length : 0;
+          const winDeals = closingDeals.filter(d => d.profit > 0);
+          const winRate = closingDeals.length > 0 ? winDeals.length / closingDeals.length : 0;
+
+          return [
+            { label: "Trades", val: String(tradeCount), color: C.t1 },
+            { label: "Volume", val: totalVolume.toLocaleString(undefined, { maximumFractionDigits: 2 }) + " lots", color: C.t1 },
+            { label: "Commissions", val: "$" + Math.abs(totalComm).toLocaleString(undefined, { maximumFractionDigits: 2 }), color: C.amber },
+            { label: "Net P&L", val: (netPnl >= 0 ? "+$" : "-$") + Math.abs(netPnl).toLocaleString(undefined, { maximumFractionDigits: 2 }), color: netPnl >= 0 ? C.green : C.red },
+            { label: "Deposits", val: depositOps.length + "\u00D7 ($" + totalDeposited.toLocaleString(undefined, { maximumFractionDigits: 0 }) + ")", color: C.t1 },
+            { label: "Bonuses", val: "$" + totalBonuses.toLocaleString(undefined, { maximumFractionDigits: 2 }), color: C.amber },
+            { label: "EA Trade %", val: (eaRatio * 100).toFixed(0) + "%", color: eaRatio > 0.8 ? C.coral : C.t1 },
+            { label: "Win Rate", val: (winRate * 100).toFixed(0) + "%", color: C.t1 },
+          ];
+        })().map(({ label, val, color }) => (
           <div key={label} style={{ background: C.bg3, borderRadius: 8, padding: "10px 14px", border: `1px solid ${C.border}` }}>
             <div style={{ fontSize: 10, color: C.t3, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</div>
             <div style={{ fontSize: 15, fontWeight: 600, color, fontFamily: "'JetBrains Mono',monospace" }}>{val}</div>
