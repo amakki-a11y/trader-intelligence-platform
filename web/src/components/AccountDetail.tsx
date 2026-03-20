@@ -183,7 +183,9 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
           // Live P&L updates for existing/new positions
           if (msg.type === "positions") {
             const p = msg.data as { positionId: number; login: number; symbol: string; direction: number; volume: number; openPrice: number; currentPrice: number; unrealizedPnl: number; swap: number };
-            if (p.login !== account.login) return;
+            if (p.login !== account.login) {
+              return;
+            }
 
             setOpenTrades(prev => {
               const idx = prev.findIndex(t => t.ticket === p.positionId);
@@ -216,12 +218,16 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
             });
           }
 
-          // Deal events — on close/partial close, refetch positions for accurate state
+          // Deal events — on open/close/partial close, refetch positions for accurate state
           if (msg.type === "deals") {
             const d = msg.data as { login: number; entry: string };
-            if (d.login === account.login && (d.entry === "Out" || d.entry === "OutBy" || d.entry === "Close" || d.entry === "Close By")) {
-              // Small delay to let PnLEngine process the close
-              setTimeout(() => refetchPositions(), 300);
+            if (d.login === account.login) {
+              const entry = d.entry.toUpperCase();
+              // IN = new position, OUT/OUT_BY = full/partial close
+              if (entry === "IN" || entry === "OUT" || entry === "OUT_BY" || entry === "INOUT") {
+                // Delay to let PnLEngine process the deal
+                setTimeout(() => refetchPositions(), 500);
+              }
             }
           }
         } catch { /* ignore parse errors */ }
