@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { CSSProperties } from "react";
 import C from "../styles/colors";
-import type { ConnectionStatus, ConnectionLogEntry, ScanSettings } from "../store/TipStore";
+import type { ConnectionStatus, ConnectionLogEntry } from "../store/TipStore";
 import { formatUptime } from "../store/TipStore";
 import { useAuth } from "../contexts/AuthContext";
 import { apiFetch } from "../services/api";
@@ -23,21 +23,15 @@ function SettingsView({ connectionStatus }: SettingsViewProps) {
 
   const [tab, setTab] = useState<SettingsTab>("servers");
   const [logs, setLogs] = useState<ConnectionLogEntry[]>([]);
-  const [scan, setScan] = useState<ScanSettings>({ historyDays: 90, minDeposit: 0, pollIntervalMs: 5000, criticalThreshold: 70 });
-  const [scanSaved, setScanSaved] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
-  // Load initial scan settings and connection logs
+  // Load initial connection logs
   useEffect(() => {
     const controller = new AbortController();
     (async () => {
       try {
-        const [scanRes, logRes] = await Promise.all([
-          apiFetch("/api/settings/scan", { signal: controller.signal }),
-          apiFetch("/api/settings/connection/logs", { signal: controller.signal }),
-        ]);
-        if (scanRes.ok) setScan(await scanRes.json() as ScanSettings);
-        if (logRes.ok) setLogs(await logRes.json() as ConnectionLogEntry[]);
+        const res = await apiFetch("/api/settings/connection/logs", { signal: controller.signal });
+        if (res.ok) setLogs(await res.json() as ConnectionLogEntry[]);
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("[SettingsView] init fetch failed:", err);
@@ -65,31 +59,11 @@ function SettingsView({ connectionStatus }: SettingsViewProps) {
     catch (err: unknown) { console.error("[SettingsView] disconnect failed:", err); }
   }, []);
 
-  const handleScanSave = useCallback(async () => {
-    try {
-      const res = await apiFetch("/api/settings/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(scan),
-      });
-      if (res.ok) { setScanSaved(true); setTimeout(() => setScanSaved(false), 2000); }
-    } catch (err: unknown) {
-      console.error("[SettingsView] scan save failed:", err);
-    }
-  }, [scan]);
-
-  const labelS: CSSProperties = { fontSize: 9, fontWeight: 600, color: C.t3, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 };
-  const inputS: CSSProperties = {
-    width: "100%", padding: "8px 10px", fontSize: 12, fontFamily: "'JetBrains Mono',Consolas,monospace",
-    background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, color: C.t1, outline: "none",
-  };
   const cardS: CSSProperties = { background: C.bg3, borderRadius: 10, border: `1px solid ${C.border}`, padding: 16 };
-  const btnPrimary: CSSProperties = {
+  const btnDanger: CSSProperties = {
     padding: "8px 20px", fontSize: 12, fontWeight: 600, borderRadius: 6, border: "none", cursor: "pointer",
-    background: C.teal, color: C.bg, fontFamily: "'JetBrains Mono',monospace",
+    background: C.red, color: C.bg, fontFamily: "'JetBrains Mono',monospace",
   };
-  const btnDanger: CSSProperties = { ...btnPrimary, background: C.red };
-  const numInputS: CSSProperties = { ...inputS, width: "100%" };
 
   // Build tabs list based on permissions
   const tabs: { id: SettingsTab; label: string }[] = [];
@@ -144,40 +118,9 @@ function SettingsView({ connectionStatus }: SettingsViewProps) {
             {/* MT5 Servers Table (admin can add/remove) */}
             {canManageServers && <ServerManagement />}
 
-            {/* Scan Settings + Connection Log */}
-            <div style={{ padding: "0 20px 20px", display: "flex", gap: 16 }}>
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 16 }}>
-                {/* Scan Settings */}
-                <div style={cardS}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: C.t1 }}>Scan Settings</div>
-                    <button onClick={handleScanSave} style={{ ...btnPrimary, padding: "5px 14px", fontSize: 11 }}>
-                      {scanSaved ? "\u2713 SAVED" : "SAVE"}
-                    </button>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                    <div>
-                      <div style={labelS}>History Days</div>
-                      <input type="number" value={scan.historyDays} onChange={e => setScan(s => ({ ...s, historyDays: +e.target.value }))} style={numInputS} />
-                    </div>
-                    <div>
-                      <div style={labelS}>Min Deposit ($)</div>
-                      <input type="number" value={scan.minDeposit} onChange={e => setScan(s => ({ ...s, minDeposit: +e.target.value }))} style={numInputS} />
-                    </div>
-                    <div>
-                      <div style={labelS}>Poll Interval (ms)</div>
-                      <input type="number" value={scan.pollIntervalMs} onChange={e => setScan(s => ({ ...s, pollIntervalMs: +e.target.value }))} style={numInputS} />
-                    </div>
-                    <div>
-                      <div style={labelS}>Critical Threshold</div>
-                      <input type="number" value={scan.criticalThreshold} onChange={e => setScan(s => ({ ...s, criticalThreshold: +e.target.value }))} style={numInputS} />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Right column: Connection Log */}
-              <div style={{ ...cardS, flex: 1, display: "flex", flexDirection: "column", minHeight: 260 }}>
+            {/* Connection Log */}
+            <div style={{ padding: "0 20px 20px" }}>
+              <div style={{ ...cardS, display: "flex", flexDirection: "column", minHeight: 200 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: C.t1, marginBottom: 10 }}>Connection Log</div>
                 <div ref={logRef} style={{
                   flex: 1, overflow: "auto", fontSize: 11, fontFamily: "'JetBrains Mono',Consolas,monospace",
