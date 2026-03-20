@@ -13,20 +13,16 @@ function Badge({ color, children, small }: { color: string; children: ReactNode;
   );
 }
 
-interface User { displayName: string; role: string; }
-
 interface TopBarProps {
   view: string;
   accounts: Account[];
-  version: string;
   isLive: boolean;
   onToggleLive: () => void;
   onScan: () => void;
   scanning: boolean;
-  user?: User | null;
 }
 
-function TopBar({ view, accounts, version, isLive, onToggleLive, onScan, scanning, user: _user }: TopBarProps) {
+function TopBar({ view, accounts, isLive, onToggleLive, onScan, scanning }: TopBarProps) {
   const critCount = accounts.filter(a => a.sev === "CRITICAL").length;
   const highCount = accounts.filter(a => a.sev === "HIGH").length;
   const titles: Record<string, string> = {
@@ -39,9 +35,8 @@ function TopBar({ view, accounts, version, isLive, onToggleLive, onScan, scannin
       borderBottom: `1px solid ${C.border}`, background: C.bg2, gap: 16,
     }}>
       <h1 style={{ fontSize: 15, fontWeight: 600, color: C.t1, letterSpacing: "-0.3px", margin: 0 }}>
-        {titles[view]}
+        {titles[view] || "Settings"}
       </h1>
-      {version === "v2" && <Badge color={C.purple} small>v2 PREVIEW</Badge>}
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <span style={{ fontSize: 11, color: C.t3, fontFamily: "'JetBrains Mono',monospace" }}>

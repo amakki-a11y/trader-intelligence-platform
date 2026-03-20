@@ -21,7 +21,7 @@ import { apiFetch } from "./services/api";
 function AppContent() {
   const { user, isAuthenticated, isLoading, logout } = useAuth();
   const [view, setView] = useState("market");
-  const [version, setVersion] = useState("v1");
+  const version = "v2"; // v2.0 is production — no more v1/v2 toggle
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [isLive, setIsLive] = useState(false);
   const [flashRows, setFlashRows] = useState<Set<number>>(new Set());
@@ -125,14 +125,12 @@ function AppContent() {
       <Sidebar
         view={view}
         setView={(v) => { setView(v); setSelectedAccount(null); }}
-        version={version}
-        setVersion={setVersion}
         connected={connectionStatus.connected}
         user={user}
         onLogout={logout}
       />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <TopBar view={view} accounts={accounts} version={version} isLive={isLive} onToggleLive={() => setIsLive(v => !v)} onScan={handleScan} scanning={scanning} user={user} />
+        <TopBar view={view} accounts={accounts} isLive={isLive} onToggleLive={() => setIsLive(v => !v)} onScan={handleScan} scanning={scanning} />
         {selectedAccount ? (
           <ErrorBoundary name="AccountDetail"><AccountDetail account={selectedAccount} version={version} onBack={() => setSelectedAccount(null)} /></ErrorBoundary>
         ) : (
@@ -149,7 +147,7 @@ function AppContent() {
           display: "flex", alignItems: "center", justifyContent: "space-between",
           fontSize: 10, color: C.t3, fontFamily: "'JetBrains Mono',monospace",
         }}>
-          <span>Rebate Abuse Detector {version === "v2" ? "v2.0" : "v1.0"} — BBC Corp</span>
+          <span>Trader Intelligence Platform v2.0 — BBC Corp</span>
           <span style={{ color: connectionStatus.connected ? C.teal : C.red }}>
             MT5: {connectionStatus.connected ? `${connectionStatus.server} — Connected` : "Disconnected"}
           </span>

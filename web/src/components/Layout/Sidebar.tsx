@@ -4,14 +4,12 @@ import C from "../../styles/colors";
 interface SidebarProps {
   view: string;
   setView: (v: string) => void;
-  version: string;
-  setVersion: (fn: (v: string) => string) => void;
   connected: boolean;
   user?: { role: string; permissions: string[]; displayName: string } | null;
   onLogout?: () => void;
 }
 
-function Sidebar({ view, setView, version, setVersion, connected, onLogout }: SidebarProps) {
+function Sidebar({ view, setView, connected, onLogout }: SidebarProps) {
   const navItems = [
     { id: "market", icon: "\u{1F4CA}", label: "Market Watch" },
     { id: "grid", icon: "\u25A6", label: "Accounts" },
@@ -49,12 +47,6 @@ function Sidebar({ view, setView, version, setVersion, connected, onLogout }: Si
         }} title="Logout">{"\u{1F6AA}"}</button>
       )}
       <button onClick={() => setView("settings")} style={btnS(view === "settings")} title="Settings">{"\u2699"}</button>
-      <button onClick={() => setVersion(v => v === "v1" ? "v2" : "v1")} style={{
-        width: 40, height: 22, borderRadius: 4, border: `1px solid ${C.border}`,
-        background: version === "v2" ? C.purpleBg : C.bg3, cursor: "pointer",
-        color: version === "v2" ? C.purple : C.t3,
-        fontSize: 9, fontFamily: "'JetBrains Mono',monospace", fontWeight: 600, marginBottom: 8,
-      }}>{version}</button>
       <div style={{
         width: 8, height: 8, borderRadius: "50%", marginBottom: 16,
         background: connected ? C.teal : C.red,
