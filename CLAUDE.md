@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current State
-v2.0 Phases 1-6 complete + Sprints 1-5 hardening + server-switch reset + **Auth & Admin system**. 168 tests passing. JWT authentication with role-based authorization (admin/dealer/compliance). Separate tip_auth PostgreSQL database. Admin UI for user management and MT5 server management. BCrypt passwords, AES-256 encrypted MT5 credentials, refresh token rotation. Login page, forced password change, admin pages for users/servers/roles.
+v2.0 Phases 1-6 complete + Sprints 1-5 hardening + server-switch reset + **Auth & Admin system** + **Live P&L**. 168 tests passing. JWT authentication with role-based authorization (admin/dealer/compliance). Separate tip_auth PostgreSQL database. Admin UI for user management and MT5 server management. BCrypt passwords, AES-256 encrypted MT5 credentials, refresh token rotation. Login page, forced password change, admin pages for users/servers/roles. Real-time position P&L via WebSocket (500ms broadcasts). Live equity/margin. MT5 TickStat session HIGH/LOW. Price-aware symbol resolver.
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to v1.0 RebateAbuseDetector.
@@ -17,7 +17,7 @@ MT5 -> DealSink/TickSink -> main Channel<T> -> ChannelFanOutService -> { DB writ
 3. Live: DealSink goes direct-to-channel, buffered deals replayed with dedup
 
 **WebSocket Model:**
-DealerHub singleton. Clients send `{ "subscribe": ["prices","accounts","positions","alerts","deals"] }`. Per-client filtering. Zero-delay tick push. Batched RAF updates on frontend (~60fps).
+DealerHub singleton. Clients send `{ "subscribe": ["prices","accounts","positions","alerts","deals"] }`. Per-client filtering. Zero-delay tick push. Batched RAF updates on frontend (~60fps). Position P&L broadcast every 500ms from PnLEngineService. Account Detail subscribes to positions+deals for live P&L, new positions, and close detection.
 
 **Resilience:**
 CircuitBreaker<T> wraps DB writes (threshold=5, open=30s) and MT5 history (threshold=3, open=60s). ServiceHealthTracker monitors all BackgroundServices. GlobalExceptionMiddleware catches unhandled exceptions.
@@ -76,6 +76,7 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 | — | Server-switch reset flow + auto-resolved watchlist | 2026-03-19 | 168 |
 | Auth | JWT auth, RBAC, admin UI, user/server management | 2026-03-20 | 168 |
 | UI | Settings consolidation, v1/v2 removal, MT5 TickStat session stats, symbol resolver fix | 2026-03-20 | 168 |
+| Live | WebSocket P&L (500ms), live equity/margin, deal-aware position lifecycle, date-filtered stats | 2026-03-20 | 168 |
 
 See `docs/CHANGELOG.md` for detailed per-phase progress log.
 
@@ -100,3 +101,5 @@ See `docs/CHANGELOG.md` for detailed per-phase progress log.
 12. **JWT + httpOnly cookies** — Access token (15min) in memory, refresh token (7 days) in httpOnly cookie. Token rotation on every refresh. BCrypt work factor 12 for passwords
 13. **AES-256 encrypted MT5 passwords** — Manager API passwords encrypted at rest in tip_auth. Key from User Secrets or environment variable, never in config files
 14. **Role-based access** — admin/dealer/compliance roles with JSONB permissions array. [RequirePermission] attribute on controllers. Admin UI for user/server management
+15. **WebSocket-driven position lifecycle** — Account Detail subscribes to positions+deals channels. P&L updates every 500ms (PnLEngineService broadcast). New positions appear instantly. Partial closes update volume. Full closes detected via deal events (entry=Out/OutBy) trigger REST refetch. Equity = balance + floating P&L, recalculated live
+16. **Date-filtered stats** — Account Detail stats cards (Trades, Volume, Commissions, P&L, Deposits) computed from loaded deals for selected date range, not from all-time scorer data
