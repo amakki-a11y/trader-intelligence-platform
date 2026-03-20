@@ -127,30 +127,38 @@ public sealed class PnLEngineService : BackgroundService
     }
 
     /// <summary>
-    /// Logs aggregate P&amp;L stats, recalculates exposure, and broadcasts position updates every 60 seconds.
+    /// Broadcasts live position P&amp;L updates every 500ms and logs stats every 60 seconds.
+    /// Fast position broadcast enables instant P&amp;L on frontend via WebSocket.
     /// </summary>
     private async Task LogStatsAsync(CancellationToken ct)
     {
+        var lastStatsLog = DateTimeOffset.UtcNow;
+
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                await Task.Delay(60000, ct).ConfigureAwait(false);
+                await Task.Delay(500, ct).ConfigureAwait(false);
 
-                // Recalculate exposure from current P&L
-                _exposureEngine.Recalculate(_pnlEngine.GetAllPnL());
-
-                _logger.LogInformation(
-                    "PnL stats: {Positions} positions, total P&L={TotalPnL:F2}, ticks processed={TicksProcessed}",
-                    _pnlEngine.TrackedPositionCount, _pnlEngine.TotalUnrealizedPnL, _ticksProcessed);
-
-                // Broadcast position updates to dashboards
-                foreach (var pnl in _pnlEngine.GetAllPnL().Values)
+                // Broadcast position P&L updates every 500ms for live dashboard
+                var allPnl = _pnlEngine.GetAllPnL();
+                foreach (var pnl in allPnl.Values)
                 {
                     await _broadcaster.BroadcastPositionUpdate(new PositionSummaryDto(
                         pnl.PositionId, pnl.Login, pnl.Symbol,
                         pnl.Direction, pnl.Volume, pnl.OpenPrice,
                         pnl.CurrentPrice, pnl.UnrealizedPnL, pnl.Swap)).ConfigureAwait(false);
+                }
+
+                // Log stats + recalculate exposure every 60 seconds
+                if ((DateTimeOffset.UtcNow - lastStatsLog).TotalSeconds >= 60)
+                {
+                    lastStatsLog = DateTimeOffset.UtcNow;
+                    _exposureEngine.Recalculate(allPnl);
+
+                    _logger.LogInformation(
+                        "PnL stats: {Positions} positions, total P&L={TotalPnL:F2}, ticks processed={TicksProcessed}",
+                        _pnlEngine.TrackedPositionCount, _pnlEngine.TotalUnrealizedPnL, _ticksProcessed);
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)

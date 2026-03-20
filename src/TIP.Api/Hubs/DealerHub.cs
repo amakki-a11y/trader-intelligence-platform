@@ -26,7 +26,7 @@ public sealed class DealerHub : IWebSocketBroadcaster
 {
     private readonly ILogger<DealerHub> _logger;
     private readonly ConcurrentDictionary<string, ClientState> _clients = new();
-    private long _lastPositionBroadcast;
+    // Position broadcast throttle removed — PnLEngineService controls frequency (500ms)
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -159,11 +159,6 @@ public sealed class DealerHub : IWebSocketBroadcaster
     /// <inheritdoc/>
     public async Task BroadcastPositionUpdate(PositionSummaryDto position)
     {
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        if (now - Interlocked.Read(ref _lastPositionBroadcast) < 1000)
-            return;
-
-        Interlocked.Exchange(ref _lastPositionBroadcast, now);
         await Broadcast("positions", position).ConfigureAwait(false);
     }
 
