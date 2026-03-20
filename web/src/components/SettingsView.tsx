@@ -22,38 +22,20 @@ function SettingsView({ connectionStatus }: SettingsViewProps) {
   const canManageServers = hasPermission("admin.servers");
 
   const [tab, setTab] = useState<SettingsTab>("servers");
-  const [server, setServer] = useState("");
-  const [login, setLogin] = useState("");
-  const passwordRef = useRef<HTMLInputElement>(null);
-  const [groupMask, setGroupMask] = useState("*");
-  const [showPassword, setShowPassword] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [logs, setLogs] = useState<ConnectionLogEntry[]>([]);
   const [scan, setScan] = useState<ScanSettings>({ historyDays: 90, minDeposit: 0, pollIntervalMs: 5000, criticalThreshold: 70 });
   const [scanSaved, setScanSaved] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
-  /** Read password from uncontrolled input ref — never stored in React state */
-  const getPassword = () => passwordRef.current?.value ?? "";
-  const clearPassword = () => { if (passwordRef.current) passwordRef.current.value = ""; };
-  const hasPassword = () => (passwordRef.current?.value ?? "").length > 0;
-
-  // FIX 3+4: Load initial config with error logging and AbortController
+  // Load initial scan settings and connection logs
   useEffect(() => {
     const controller = new AbortController();
     (async () => {
       try {
-        const [cfgRes, scanRes, logRes] = await Promise.all([
-          apiFetch("/api/settings/connection", { signal: controller.signal }),
+        const [scanRes, logRes] = await Promise.all([
           apiFetch("/api/settings/scan", { signal: controller.signal }),
           apiFetch("/api/settings/connection/logs", { signal: controller.signal }),
         ]);
-        if (cfgRes.ok) {
-          const cfg = await cfgRes.json() as { server: string; login: string; groupMask: string };
-          if (cfg.server && cfg.server !== "simulator:0") { setServer(cfg.server); setLogin(cfg.login); setGroupMask(cfg.groupMask); }
-        }
         if (scanRes.ok) setScan(await scanRes.json() as ScanSettings);
         if (logRes.ok) setLogs(await logRes.json() as ConnectionLogEntry[]);
       } catch (err: unknown) {
@@ -78,50 +60,10 @@ function SettingsView({ connectionStatus }: SettingsViewProps) {
     return () => { clearInterval(id); controller.abort(); };
   }, []);
 
-  const handleConnect = useCallback(async () => {
-    setConnecting(true);
-    try {
-      const pw = getPassword();
-      const res = await apiFetch("/api/settings/connection", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ server, login, password: pw || undefined, groupMask }),
-      });
-      if (res.ok) { clearPassword(); }
-      else {
-        const err = await res.json().catch(() => null) as { error?: string } | null;
-        if (err?.error) alert(err.error);
-      }
-    } catch (err: unknown) {
-      console.error("[SettingsView] connect failed:", err);
-    }
-    finally { setConnecting(false); }
-  }, [server, login, groupMask]);
-
   const handleDisconnect = useCallback(async () => {
     try { await apiFetch("/api/settings/connection/disconnect", { method: "POST" }); }
     catch (err: unknown) { console.error("[SettingsView] disconnect failed:", err); }
   }, []);
-
-  const handleSave = useCallback(async () => {
-    setSaving(true);
-    try {
-      const pw = getPassword();
-      const res = await apiFetch("/api/settings/connection/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ server, login, password: pw, groupMask }),
-      });
-      if (res.ok) { setSaved(true); clearPassword(); setTimeout(() => setSaved(false), 2000); }
-      else {
-        const err = await res.json().catch(() => null) as { error?: string } | null;
-        if (err?.error) alert(err.error);
-      }
-    } catch (err: unknown) {
-      console.error("[SettingsView] save failed:", err);
-    }
-    finally { setSaving(false); }
-  }, [server, login, groupMask]);
 
   const handleScanSave = useCallback(async () => {
     try {
@@ -147,7 +89,7 @@ function SettingsView({ connectionStatus }: SettingsViewProps) {
     background: C.teal, color: C.bg, fontFamily: "'JetBrains Mono',monospace",
   };
   const btnDanger: CSSProperties = { ...btnPrimary, background: C.red };
-  const numInputS: CSSProperties = { ...inputS, width: 120 };
+  const numInputS: CSSProperties = { ...inputS, width: "100%" };
 
   // Build tabs list based on permissions
   const tabs: { id: SettingsTab; label: string }[] = [];
@@ -170,13 +112,12 @@ function SettingsView({ connectionStatus }: SettingsViewProps) {
       <div style={{ padding: "12px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 16 }}>
         <div style={{
           width: 10, height: 10, borderRadius: "50%",
-          background: connecting ? C.amber : connectionStatus.connected ? C.teal : C.red,
-          boxShadow: connecting ? `0 0 10px ${C.amber}60` : connectionStatus.connected ? `0 0 10px ${C.teal}60` : `0 0 10px ${C.red}60`,
-          animation: connecting ? "pulse 1.5s infinite" : "none",
+          background: connectionStatus.connected ? C.teal : C.red,
+          boxShadow: connectionStatus.connected ? `0 0 10px ${C.teal}60` : `0 0 10px ${C.red}60`,
         }} />
         <div style={{ flex: 1 }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: C.t1 }}>
-            {connecting ? "Connecting..." : connectionStatus.connected ? "Connected" : "Disconnected"}
+            {connectionStatus.connected ? "Connected" : "Disconnected"}
           </span>
           {connectionStatus.connected && (
             <span style={{ fontSize: 11, color: C.t3, fontFamily: "'JetBrains Mono',monospace", marginLeft: 10 }}>
@@ -203,52 +144,9 @@ function SettingsView({ connectionStatus }: SettingsViewProps) {
             {/* MT5 Servers Table (admin can add/remove) */}
             {canManageServers && <ServerManagement />}
 
-            {/* Quick Connect + Scan Settings + Connection Log */}
+            {/* Scan Settings + Connection Log */}
             <div style={{ padding: "0 20px 20px", display: "flex", gap: 16 }}>
               <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 16 }}>
-                {/* Quick Connect Form */}
-                <div style={cardS}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: C.t1, marginBottom: 14 }}>Quick Connect</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                      <div>
-                        <div style={labelS}>Server Address</div>
-                        <input value={server} onChange={e => setServer(e.target.value)} placeholder="mt5-live.broker.com:443" style={inputS} />
-                      </div>
-                      <div>
-                        <div style={labelS}>Manager Login</div>
-                        <input value={login} onChange={e => setLogin(e.target.value)} placeholder="Manager ID number" style={inputS} />
-                      </div>
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                      <div>
-                        <div style={labelS}>Manager Password</div>
-                        <div style={{ position: "relative" }}>
-                          <input ref={passwordRef} type={showPassword ? "text" : "password"} placeholder={"••••••••"} style={inputS} />
-                          <button onClick={() => setShowPassword(v => !v)} style={{
-                            position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
-                            background: "none", border: "none", cursor: "pointer", color: C.t3, fontSize: 14,
-                          }}>{showPassword ? "\u{1F648}" : "\u{1F441}"}</button>
-                        </div>
-                      </div>
-                      <div>
-                        <div style={labelS}>Group Mask</div>
-                        <input value={groupMask} onChange={e => setGroupMask(e.target.value)} placeholder="*" style={inputS} />
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-                      <button onClick={handleSave} disabled={saving || !server || !login}
-                        style={{ ...btnPrimary, background: C.blue, opacity: saving || !server || !login ? 0.5 : 1, flex: 1 }}>
-                        {saving ? "SAVING..." : saved ? "SAVED" : "SAVE CREDENTIALS"}
-                      </button>
-                      <button onClick={handleConnect} disabled={connecting || !server || !login}
-                        style={{ ...btnPrimary, opacity: connecting || !server || !login ? 0.5 : 1, flex: 1 }}>
-                        {connecting ? "CONNECTING..." : hasPassword() ? "CONNECT" : "RECONNECT"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
                 {/* Scan Settings */}
                 <div style={cardS}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
