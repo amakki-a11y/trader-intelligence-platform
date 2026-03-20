@@ -479,7 +479,9 @@ try
         sp.GetRequiredService<IWebSocketBroadcaster>(),
         sp.GetRequiredService<PriceCache>(),
         sp.GetRequiredService<SymbolCache>(),
-        serviceHealthTracker));
+        serviceHealthTracker,
+        sp.GetRequiredService<IMT5Api>(),
+        sp.GetRequiredService<ConnectionManager>()));
 
     builder.Services.AddSingleton(sp => new ComputeEngineService(
         sp.GetRequiredService<ILogger<ComputeEngineService>>(),

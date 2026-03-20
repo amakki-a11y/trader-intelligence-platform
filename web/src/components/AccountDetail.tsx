@@ -59,40 +59,34 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
     credit: 0, registration: "", lastLogin: "", server: "", currency: "USD",
   });
 
-  // Poll live account info from MT5 every 2s (balance, equity, margin, credit, etc.)
-  // MT5 CIMTAccount provides real-time margin/equity/free margin that change with positions
+  // Fetch account info from MT5 once on mount (balance, margin, credit, registration, etc.)
   useEffect(() => {
     const controller = new AbortController();
-    const fetchInfo = async () => {
-      try {
-        const res = await apiFetch(`/api/accounts/${account.login}/info`, { signal: controller.signal });
-        if (!res.ok) return;
-        const data = await res.json() as Record<string, unknown>;
-        if (data.error) return;
-
+    apiFetch(`/api/accounts/${account.login}/info`, { signal: controller.signal })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d || d.error) return;
+        const data = d as Record<string, unknown>;
         const regTime = data.registrationTime as number;
         const lastTime = data.lastAccessTime as number;
 
-        setAcctInfo({
+        setAcctInfo(prev => ({
+          ...prev,
           balance: (data.balance as number) ?? 0,
           equity: (data.equity as number) ?? 0,
           margin: (data.margin as number) ?? 0,
           freeMargin: (data.freeMargin as number) ?? 0,
           credit: (data.credit as number) ?? 0,
-          leverage: data.leverage ? `1:${data.leverage}` : "1:100",
+          leverage: data.leverage ? `1:${data.leverage}` : prev.leverage,
           currency: (data.currency as string) ?? "USD",
           registration: regTime > 0 ? new Date(regTime * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "",
           lastLogin: lastTime > 0 ? new Date(lastTime * 1000).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "",
-          marginLevel: "0%",
-          server: "",
-        });
-      } catch (err: unknown) {
+        }));
+      })
+      .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
-      }
-    };
-    fetchInfo();
-    const interval = setInterval(fetchInfo, 2000);
-    return () => { clearInterval(interval); controller.abort(); };
+      });
+    return () => controller.abort();
   }, [account.login]);
 
   // Fetch deal history — triggered on initial load and when LOAD button clicked
@@ -285,20 +279,24 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
   const thStyle: CSSProperties = { padding: "6px 6px", fontSize: 9, fontFamily: "'JetBrains Mono',monospace", fontWeight: 600, color: C.t3, textAlign: "left", borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: C.bg2, textTransform: "uppercase", letterSpacing: "0.5px" };
   const tdStyle: CSSProperties = { padding: "5px 6px", fontSize: 11, color: C.t2, fontFamily: "'JetBrains Mono',monospace", borderBottom: `1px solid ${C.border}` };
   const dateInputStyle: CSSProperties = { background: C.bg3, border: `1px solid ${C.border}`, borderRadius: 5, padding: "4px 8px", color: C.t1, fontSize: 11, fontFamily: "'JetBrains Mono',monospace", outline: "none", colorScheme: "dark" };
-  // Floating P&L from MT5 (equity - balance) — accurate, polled every 2s
-  const floatingPnl = acctInfo.equity - acctInfo.balance;
-
-  // Total P&L from open trades table (WebSocket positions — for the TOTAL P&L row)
+  // Floating P&L computed from WebSocket position data (updates every 500ms)
   const totalOpenPnl = openTrades.reduce((s, t) => s + t.profit, 0);
+  const totalOpenSwap = openTrades.reduce((s, t) => s + t.swap, 0);
+  const floatingPnl = totalOpenPnl + totalOpenSwap;
 
-  const marginLevel = acctInfo.margin > 0 ? ((acctInfo.equity / acctInfo.margin) * 100) : 0;
+  // Live equity = balance + floating P&L (balance from initial load, P&L from WebSocket)
+  const liveEquity = acctInfo.balance + floatingPnl;
+  const liveFreeMargin = liveEquity - acctInfo.margin;
+  const marginLevel = acctInfo.margin > 0 ? ((liveEquity / acctInfo.margin) * 100) : 0;
+
+  const fmt2 = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const infoItems = [
-    { label: "Balance", val: "$" + acctInfo.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: C.t1 },
-    { label: "Equity", val: "$" + acctInfo.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: acctInfo.equity >= acctInfo.balance ? C.green : C.red },
-    { label: "Floating P&L", val: (floatingPnl >= 0 ? "+$" : "-$") + Math.abs(floatingPnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: floatingPnl >= 0 ? C.green : C.red },
-    { label: "Margin", val: "$" + acctInfo.margin.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: C.amber },
-    { label: "Free Margin", val: "$" + acctInfo.freeMargin.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }), color: acctInfo.freeMargin >= 0 ? C.t1 : C.red },
+    { label: "Balance", val: "$" + fmt2(acctInfo.balance), color: C.t1 },
+    { label: "Equity", val: "$" + fmt2(liveEquity), color: liveEquity >= acctInfo.balance ? C.green : C.red },
+    { label: "Floating P&L", val: (floatingPnl >= 0 ? "+$" : "-$") + fmt2(Math.abs(floatingPnl)), color: floatingPnl >= 0 ? C.green : C.red },
+    { label: "Margin", val: "$" + fmt2(acctInfo.margin), color: C.amber },
+    { label: "Free Margin", val: "$" + fmt2(liveFreeMargin), color: liveFreeMargin >= 0 ? C.t1 : C.red },
     { label: "Margin Level", val: marginLevel > 0 ? marginLevel.toFixed(2) + "%" : "0%", color: marginLevel > 100 ? C.teal : marginLevel > 50 ? C.amber : C.red },
     { label: "Leverage", val: acctInfo.leverage, color: C.purple },
     { label: "Credit", val: "$" + acctInfo.credit.toLocaleString(), color: C.amber },
