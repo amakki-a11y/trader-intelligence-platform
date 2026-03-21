@@ -94,7 +94,7 @@ public sealed class ComputeEngineService : BackgroundService
                 foreach (var deal in batch)
                 {
                     _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId,
-                        deal.Login, deal.Symbol, deal.TimeMsc);
+                        deal.Login, deal.Symbol, deal.TimeMsc, deal.Entry);
                     _accountScorer.ProcessDeal(
                         deal.DealId, deal.Login, deal.Action, deal.Volume, deal.Profit,
                         deal.Commission, deal.Swap, deal.ExpertId, deal.Reason,
@@ -167,7 +167,7 @@ public sealed class ComputeEngineService : BackgroundService
     {
         // Step 1: Classify the deal and determine position effect
         var result = _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId,
-            deal.Login, deal.Symbol, deal.TimeMsc);
+            deal.Login, deal.Symbol, deal.TimeMsc, deal.Entry);
 
         // Step 2: Score the account
         var account = _accountScorer.ProcessDeal(

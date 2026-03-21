@@ -42,9 +42,10 @@ public sealed class DealProcessor
     /// <param name="login">Account login (0 = invalid).</param>
     /// <param name="symbol">Trading symbol (null/empty = invalid for trade deals).</param>
     /// <param name="timeMsc">Deal time in milliseconds since epoch (0 = invalid).</param>
+    /// <param name="entry">Deal entry type: 0=IN, 1=OUT, 2=INOUT, 3=OUT_BY. Default -1 (unknown).</param>
     /// <returns>Classification result with deal type and position effect.</returns>
     public DealProcessingResult ProcessDeal(ulong dealId, int action, double volume, ulong positionId,
-        ulong login, string? symbol, long timeMsc)
+        ulong login, string? symbol, long timeMsc, int entry = -1)
     {
         // Validate required fields
         if (login == 0)
@@ -87,8 +88,12 @@ public sealed class DealProcessor
 
         if (dealType == DealType.Buy || dealType == DealType.Sell)
         {
-            // Check for out-of-order deal delivery
-            if (_lastDealTimestamps.TryGetValue(positionId, out var lastMsc) && timeMsc < lastMsc)
+            // Close deals (OUT=1, OUT_BY=3) MUST always be processed — you can't "re-close" a position,
+            // and rejecting them causes ghost positions after liquidation/stop-out.
+            // Only apply out-of-order protection to opening deals (IN=0).
+            var isCloseDeal = entry == 1 || entry == 3;
+
+            if (!isCloseDeal && _lastDealTimestamps.TryGetValue(positionId, out var lastMsc) && timeMsc < lastMsc)
             {
                 _logger?.LogWarning("Out-of-order deal {DealId} for position {PositionId}: " +
                     "timeMsc {TimeMsc} < last {LastMsc}. Skipping.", dealId, positionId, timeMsc, lastMsc);
@@ -100,7 +105,8 @@ public sealed class DealProcessor
                     AffectedPositionId = positionId
                 };
             }
-            _lastDealTimestamps[positionId] = timeMsc;
+            _lastDealTimestamps[positionId] = Math.Max(timeMsc,
+                _lastDealTimestamps.TryGetValue(positionId, out var existing) ? existing : 0);
 
             return ProcessTradeDeal(dealId, dealType, volume, positionId);
         }
