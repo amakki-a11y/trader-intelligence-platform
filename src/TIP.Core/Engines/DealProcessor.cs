@@ -121,6 +121,18 @@ public sealed class DealProcessor
     }
 
     /// <summary>
+    /// Resets all internal state (open positions, timestamps, locks).
+    /// Called before warmup replay to ensure clean processing.
+    /// </summary>
+    public void Reset()
+    {
+        _openPositions.Clear();
+        _positionLocks.Clear();
+        _lastDealTimestamps.Clear();
+        _logger?.LogInformation("DealProcessor reset — cleared all position tracking state");
+    }
+
+    /// <summary>
     /// Gets the current number of tracked open positions.
     /// </summary>
     public int OpenPositionCount => _openPositions.Count;

@@ -88,13 +88,42 @@ public sealed class ComputeEngineService : BackgroundService
         if (!_dbEnabled) return;
         try
         {
+            // Reset DealProcessor and PnLEngine before replay to avoid stale timestamps
+            // and duplicate positions from previous warmup runs
+            _dealProcessor.Reset();
+            _pnlEngine.Reset();
+
             var warmupCount = 0;
             await foreach (var batch in _dealRepository.GetAllDealsBatchedAsync(ct: ct).ConfigureAwait(false))
             {
                 foreach (var deal in batch)
                 {
-                    _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId,
+                    var result = _dealProcessor.ProcessDeal(deal.DealId, deal.Action, deal.Volume, deal.PositionId,
                         deal.Login, deal.Symbol, deal.TimeMsc, deal.Entry);
+
+                    // Update PnLEngine position state from historical deals
+                    // This ensures positions are correct even after restart (e.g., liquidated accounts)
+                    if (result.PositionEffect == PositionAction.Opened)
+                    {
+                        _pnlEngine.OnPositionOpened(new OpenPosition
+                        {
+                            PositionId = (long)deal.PositionId,
+                            Login = deal.Login,
+                            Symbol = deal.Symbol,
+                            Direction = deal.Action,
+                            Volume = deal.Volume,
+                            OpenPrice = deal.Price
+                        });
+                    }
+                    else if (result.PositionEffect == PositionAction.Closed && result.AffectedPositionId.HasValue)
+                    {
+                        _pnlEngine.OnPositionClosed((long)result.AffectedPositionId.Value, deal.Symbol);
+                    }
+                    else if (result.PositionEffect == PositionAction.Modified && result.AffectedPositionId.HasValue && result.RemainingVolume.HasValue)
+                    {
+                        _pnlEngine.OnPositionModified((long)result.AffectedPositionId.Value, deal.Symbol, result.RemainingVolume.Value);
+                    }
+
                     _accountScorer.ProcessDeal(
                         deal.DealId, deal.Login, deal.Action, deal.Volume, deal.Profit,
                         deal.Commission, deal.Swap, deal.ExpertId, deal.Reason,
