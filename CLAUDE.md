@@ -1,7 +1,7 @@
 # Trader Intelligence Platform (TIP) v2.0
 
 ## Current State
-v2.0 Phases 1-6 complete + Sprints 1-5 hardening + server-switch reset + **Auth & Admin system** + **Live P&L**. 168 tests passing. JWT authentication with role-based authorization (admin/dealer/compliance). Separate tip_auth PostgreSQL database. Admin UI for user management and MT5 server management. BCrypt passwords, AES-256 encrypted MT5 credentials, refresh token rotation. Login page, forced password change, admin pages for users/servers/roles. Real-time position P&L via WebSocket (500ms broadcasts). Live equity/margin. MT5 TickStat session HIGH/LOW. Price-aware symbol resolver.
+v2.0 Phases 1-6 complete + Sprints 1-5 hardening + server-switch reset + **Auth & Admin system** + **Live P&L** + **UI Polish**. 168 tests passing. JWT authentication with role-based authorization (admin/dealer/compliance). Separate tip_auth PostgreSQL database. Admin UI for user management and MT5 server management. BCrypt passwords, AES-256 encrypted MT5 credentials, refresh token rotation. Login page, forced password change, admin pages for users/servers/roles. Real-time position P&L via WebSocket (500ms broadcasts). Live equity/margin. MT5 TickStat session HIGH/LOW. Price-aware symbol resolver. Shared component library (Badge, ScoreBar, RoutingBadge, ThreatBars, TableStyles). CRITICAL alert banner, keyboard navigation, price flash animations, pagination, live clock, skeleton loading.
 
 ## What is TIP?
 Brokerage operations platform for detecting trading abuse on MetaTrader 5. Successor to v1.0 RebateAbuseDetector.
@@ -38,7 +38,7 @@ TIP.sln
 ├── src/TIP.Data/        — TimescaleDB access layer (Npgsql) + Auth DB repositories
 ├── src/TIP.Api/         — ASP.NET Core host + JWT auth + admin services
 ├── src/TIP.Tests/       — MSTest unit tests
-├── web/                 — React + TypeScript dashboard (Vite)
+├── web/                 — React + TypeScript dashboard (Vite) — shared/ component library
 └── docs/                — Schema, setup, changelog
 ```
 
@@ -77,6 +77,7 @@ TIP.Tests     → TIP.Api, TIP.Connector, TIP.Core, TIP.Data
 | Auth | JWT auth, RBAC, admin UI, user/server management | 2026-03-20 | 168 |
 | UI | Settings consolidation, v1/v2 removal, MT5 TickStat session stats, symbol resolver fix | 2026-03-20 | 168 |
 | Live | WebSocket P&L (500ms), live equity/margin, deal-aware position lifecycle, date-filtered stats | 2026-03-20 | 168 |
+| UX | Shared component lib, CRIT banner, keyboard nav, price flash, pagination, sidebar icons, table polish, skeleton loading | 2026-03-20 | 168 |
 
 See `docs/CHANGELOG.md` for detailed per-phase progress log.
 
@@ -103,3 +104,6 @@ See `docs/CHANGELOG.md` for detailed per-phase progress log.
 14. **Role-based access** — admin/dealer/compliance roles with JSONB permissions array. [RequirePermission] attribute on controllers. Admin UI for user/server management
 15. **Deal-driven position lifecycle (zero MT5 polling)** — PnLEngine positions maintained entirely from deal events: IN→OnPositionOpened, OUT→OnPositionClosed, partial close→OnPositionModified (volume update). No periodic GetPositions polling. Positions loaded once at startup, then kept accurate by deal stream. P&L recalculated on every tick. WebSocket broadcasts every 500ms. Frontend subscribes to positions+deals channels for live P&L, new positions, and close detection. Equity = balance + floating P&L
 16. **Date-filtered stats** — Account Detail stats cards (Trades, Volume, Commissions, P&L, Deposits) computed from loaded deals for selected date range, not from all-time scorer data
+17. **Shared component library** — `web/src/components/shared/` contains Badge, ScoreBar, RoutingBadge, ThreatBars, TableStyles, Skeleton. All table views import from shared to eliminate duplication. Badge supports `small` prop. TableStyles exports `thStyle`, `tdStyle`, `tdMono`
+18. **Lucide-react icons in sidebar** — Replaced Unicode emoji with lucide-react icons (BarChart3, Users, Radio, ShieldAlert, LogOut, Settings). Hover tooltips positioned absolute left of sidebar
+19. **Google Fonts via link tag** — Moved `@import url(...)` from React `<style>` tags to `<link>` in index.html for proper font loading before render

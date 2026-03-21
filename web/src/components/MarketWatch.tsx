@@ -3,6 +3,9 @@ import C, { DEFAULT_WATCHLIST_BASES, resolveWatchlist } from "../styles/colors";
 import type { MarketDataPoint, VolumeData } from "../store/TipStore";
 import { getAccessToken, apiFetch } from "../services/api";
 
+type FlashDir = "up" | "down" | null;
+type FlashState = { bidDir: FlashDir; askDir: FlashDir };
+
 function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
   void _isLive;
   const [watchlist, setWatchlist] = useState<string[]>([]);
@@ -21,6 +24,9 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
 
   const [volumeBySymbol, setVolumeBySymbol] = useState<Record<string, VolumeData>>({});
   const [sessionHighLow, setSessionHighLow] = useState<Record<string, { high: number; low: number }>>({});
+  const [flashStates, setFlashStates] = useState<Record<string, FlashState>>({});
+  const prevPricesRef = useRef<Record<string, { bid: number; ask: number }>>({});
+  const flashTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const advancedData = useMemo(() => {
     const data: Record<string, { low: number; high: number }> = {};
@@ -36,7 +42,6 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     return data;
   }, [watchlist, marketData, sessionHighLow]);
 
-  // Load symbols + prices together, then resolve watchlist using live price data
   useEffect(() => {
     const controller = new AbortController();
     (async () => {
@@ -47,10 +52,7 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
         ]);
         const syms: Array<{ symbol: string; description: string }> = symsRes.ok ? await symsRes.json() : [];
         const pricesArr: Array<{ symbol: string; bid: number; ask: number; spread: number; changePercent: number; timeMsc: number; digits: number }> = pricesRes.ok ? await pricesRes.json() : [];
-
         setAllSymbols(syms);
-
-        // Build price lookup for resolver
         const priceLookup: Record<string, { bid: number }> = {};
         const newMarketData: Record<string, MarketDataPoint> = {};
         for (const p of pricesArr) {
@@ -60,8 +62,6 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
           }
         }
         setMarketData(prev => ({ ...prev, ...newMarketData }));
-
-        // Resolve watchlist using live prices to pick symbols with actual feeds
         if (syms.length > 0) {
           const resolved = resolveWatchlist(DEFAULT_WATCHLIST_BASES, syms, priceLookup);
           setWatchlist(resolved);
@@ -82,6 +82,38 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     const keys = Object.keys(pending);
     if (keys.length === 0) return;
     pendingPricesRef.current = {};
+
+    // Compare with previous prices for flash
+    const newFlashes: Record<string, FlashState> = {};
+    for (const k of keys) {
+      const v = pending[k];
+      if (!v) continue;
+      const prev = prevPricesRef.current[k];
+      if (prev) {
+        const bidDir: FlashDir = v.bid > prev.bid ? "up" : v.bid < prev.bid ? "down" : null;
+        const askDir: FlashDir = v.ask > prev.ask ? "up" : v.ask < prev.ask ? "down" : null;
+        if (bidDir || askDir) {
+          newFlashes[k] = { bidDir, askDir };
+        }
+      }
+      prevPricesRef.current[k] = { bid: v.bid, ask: v.ask };
+    }
+
+    if (Object.keys(newFlashes).length > 0) {
+      setFlashStates(prev => ({ ...prev, ...newFlashes }));
+      // Clear flash after 400ms
+      for (const sym of Object.keys(newFlashes)) {
+        if (flashTimersRef.current[sym]) clearTimeout(flashTimersRef.current[sym]);
+        flashTimersRef.current[sym] = setTimeout(() => {
+          setFlashStates(prev => {
+            const next = { ...prev };
+            delete next[sym];
+            return next;
+          });
+        }, 400);
+      }
+    }
+
     setMarketData(prev => {
       const next = { ...prev };
       for (const k of keys) { const v = pending[k]; if (v) next[k] = v; }
@@ -89,7 +121,13 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     });
   }, []);
 
-  // Volume periodic fetch
+  // Cleanup flash timers
+  useEffect(() => {
+    return () => {
+      for (const t of Object.values(flashTimersRef.current)) clearTimeout(t);
+    };
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     const fetchVolume = async () => {
@@ -112,7 +150,6 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     return () => { clearInterval(volumeInterval); controller.abort(); };
   }, []);
 
-  // Session high/low from MT5 TickStat API (real session data, not backend-calculated)
   useEffect(() => {
     if (watchlist.length === 0) return;
     const controller = new AbortController();
@@ -137,7 +174,6 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     return () => { clearInterval(hlInterval); controller.abort(); };
   }, [watchlist]);
 
-  // FIX 2+5: WebSocket with exponential backoff and full cleanup
   useEffect(() => {
     let reconnectTimer: ReturnType<typeof setTimeout>;
     let staleCheckTimer: ReturnType<typeof setInterval>;
@@ -156,7 +192,7 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
 
       ws.onopen = () => {
         setWsStatus("connected");
-        attempt = 0; // FIX 2: reset on success
+        attempt = 0;
         ws.send(JSON.stringify({ subscribe: ["prices"] }));
       };
 
@@ -179,7 +215,6 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
       ws.onclose = () => {
         setWsStatus("disconnected");
         wsRef.current = null;
-        // FIX 2: exponential backoff
         const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
         attempt++;
         console.log(`[MarketWatch WS] reconnect attempt ${attempt} in ${delay}ms`);
@@ -232,6 +267,12 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
     if (abs >= 100) return val.toFixed(2);
     if (abs >= 10) return val.toFixed(3);
     return val.toFixed(5);
+  };
+
+  const flashBg = (dir: FlashDir): string => {
+    if (dir === "up") return "rgba(102,187,106,0.25)";
+    if (dir === "down") return "rgba(255,82,82,0.25)";
+    return "transparent";
   };
 
   type MktRow = { sym: string; bid: number; ask: number; spread: number; buyVol: number; sellVol: number; netVol: number; change: number; digits: number };
@@ -298,44 +339,50 @@ function MarketWatch({ isLive: _isLive }: { isLive: boolean }) {
       <div style={{ flex: 1, overflow: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead><tr>
-            {headers.map(h => (
-              <th key={h.k || "del"} onClick={() => h.k && toggleSort(h.k)} style={{
-                padding: "8px 10px", fontSize: 9, fontFamily: "'JetBrains Mono',monospace", fontWeight: 600,
-                color: sortCol === h.k ? C.teal : C.t3, textAlign: h.k === "" ? "center" : "left",
-                borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: C.bg2,
-                textTransform: "uppercase", letterSpacing: "0.5px", cursor: h.k ? "pointer" : "default", userSelect: "none",
-              }}>{h.l} {sortCol === h.k ? (sortDir === 1 ? "\u2191" : "\u2193") : ""}</th>
-            ))}
+            {headers.map(h => {
+              const isNum = ["bid","ask","spread","buyVol","sellVol","netVol","change"].includes(h.k);
+              return (
+                <th key={h.k || "del"} onClick={() => h.k && toggleSort(h.k)} style={{
+                  padding: "8px 10px", fontSize: 9, fontFamily: "'JetBrains Mono',monospace", fontWeight: 600,
+                  color: sortCol === h.k ? C.teal : C.t3, textAlign: h.k === "" ? "center" : isNum ? "right" : "left",
+                  borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: C.bg2,
+                  textTransform: "uppercase", letterSpacing: "0.5px", cursor: h.k ? "pointer" : "default", userSelect: "none",
+                }}>{h.l} {sortCol === h.k ? (sortDir === 1 ? "\u2191" : "\u2193") : ""}</th>
+              );
+            })}
           </tr></thead>
           <tbody>
-            {rows.map(({ sym, bid, ask, spread, buyVol, sellVol, netVol, change, digits }) => {
+            {rows.map(({ sym, bid, ask, spread, buyVol, sellVol, netVol, change, digits }, idx) => {
               const netColor = netVol > 0 ? C.green : netVol < 0 ? C.red : C.t3;
               const changeColor = change >= 0 ? C.green : C.red;
               const maxVol = Math.max(buyVol, sellVol, 1);
               const adv = advancedData[sym] ?? { low: 0, high: 0 };
               const vol = volumeBySymbol[sym] ?? { buy: 0, sell: 0, net: 0, topBuyer: { login: 0, volume: 0 }, topSeller: { login: 0, volume: 0 } };
               const bdr = advanced ? "none" : `1px solid ${C.border}`;
+              const flash = flashStates[sym];
               return (
                 <Fragment key={sym}>
-                  <tr onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }} onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+                  <tr style={{ background: idx % 2 === 1 ? "rgba(255,255,255,0.015)" : "transparent" }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = idx % 2 === 1 ? "rgba(255,255,255,0.015)" : "transparent"; }}>
                     <td style={{ padding: "10px 10px", borderBottom: bdr }}><span style={{ fontSize: 13, fontWeight: 600, color: bid > 0 ? C.t1 : C.t3, fontFamily: "'JetBrains Mono',monospace" }}>{sym}</span></td>
-                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: bid > 0 ? C.blue : C.t3, borderBottom: bdr, opacity: bid > 0 ? 1 : 0.4 }}>{bid > 0 ? formatPrice(bid, digits) : "No feed"}</td>
-                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: bid > 0 ? C.red : C.t3, borderBottom: bdr, opacity: bid > 0 ? 1 : 0.4 }}>{ask > 0 ? formatPrice(ask, digits) : "\u2014"}</td>
-                    <td style={{ padding: "10px 10px", fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.t3, borderBottom: bdr }}>{spread ? formatPrice(spread, digits) : "\u2014"}</td>
-                    <td style={{ padding: "10px 10px", borderBottom: bdr }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: bid > 0 ? C.blue : C.t3, borderBottom: bdr, opacity: bid > 0 ? 1 : 0.4, textAlign: "right", background: flash ? flashBg(flash.bidDir) : "transparent", transition: "background-color 300ms ease-out" }}>{bid > 0 ? formatPrice(bid, digits) : "No feed"}</td>
+                    <td style={{ padding: "10px 10px", fontSize: 13, fontFamily: "'JetBrains Mono',monospace", color: bid > 0 ? C.red : C.t3, borderBottom: bdr, opacity: bid > 0 ? 1 : 0.4, textAlign: "right", background: flash ? flashBg(flash.askDir) : "transparent", transition: "background-color 300ms ease-out" }}>{ask > 0 ? formatPrice(ask, digits) : "\u2014"}</td>
+                    <td style={{ padding: "10px 10px", fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.t3, borderBottom: bdr, textAlign: "right" }}>{spread ? formatPrice(spread, digits) : "\u2014"}</td>
+                    <td style={{ padding: "10px 10px", borderBottom: bdr, textAlign: "right" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
                         <div style={{ width: 50, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.06)" }}><div style={{ width: `${(buyVol / maxVol) * 100}%`, height: "100%", borderRadius: 2, background: C.blue, transition: "width 0.3s" }} /></div>
                         <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.blue }}>{buyVol}</span>
                       </div>
                     </td>
-                    <td style={{ padding: "10px 10px", borderBottom: bdr }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <td style={{ padding: "10px 10px", borderBottom: bdr, textAlign: "right" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
                         <div style={{ width: 50, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.06)" }}><div style={{ width: `${(sellVol / maxVol) * 100}%`, height: "100%", borderRadius: 2, background: C.red, transition: "width 0.3s" }} /></div>
                         <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: C.red }}>{sellVol}</span>
                       </div>
                     </td>
-                    <td style={{ padding: "10px 10px", borderBottom: bdr }}><span style={{ fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono',monospace", color: netColor }}>{netVol > 0 ? "+" : ""}{netVol}</span></td>
-                    <td style={{ padding: "10px 10px", borderBottom: bdr }}><span style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: changeColor }}>{change >= 0 ? "\u25B2" : "\u25BC"} {Math.abs(change).toFixed(2)}%</span></td>
+                    <td style={{ padding: "10px 10px", borderBottom: bdr, textAlign: "right" }}><span style={{ fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono',monospace", color: netColor }}>{netVol > 0 ? "+" : ""}{netVol}</span></td>
+                    <td style={{ padding: "10px 10px", borderBottom: bdr, textAlign: "right" }}><span style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: changeColor }}>{change >= 0 ? "\u25B2" : "\u25BC"} {Math.abs(change).toFixed(2)}%</span></td>
                     <td style={{ padding: "10px 6px", borderBottom: bdr, textAlign: "center" }}>
                       <button onClick={() => handleRemove(sym)} style={{ background: "none", border: "none", color: C.t3, fontSize: 14, cursor: "pointer", opacity: 0.5, lineHeight: 1 }} title="Remove symbol"
                         onMouseEnter={e => { e.currentTarget.style.opacity = "1"; }} onMouseLeave={e => { e.currentTarget.style.opacity = "0.5"; }}>{"\u00D7"}</button>

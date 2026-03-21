@@ -1,36 +1,10 @@
 import { useState, useMemo } from "react";
-import type { CSSProperties, ReactNode } from "react";
-import C, { sevColor } from "../styles/colors";
+import type { CSSProperties } from "react";
+import C from "../styles/colors";
 import type { Account, Threats } from "../store/TipStore";
-
-function Badge({ color, children }: { color: string; children: ReactNode }) {
-  return (
-    <span style={{
-      display: "inline-block", fontFamily: "'JetBrains Mono',monospace",
-      fontSize: 10, fontWeight: 600, letterSpacing: "0.5px",
-      color, background: color + "14", border: `1px solid ${color}40`,
-      borderRadius: 4, padding: "2px 8px",
-    }}>{children}</span>
-  );
-}
-
-function ScoreBar({ score, width = 80 }: { score: number; width?: number }) {
-  const pct = Math.min(100, Math.max(0, score));
-  const color = sevColor(score);
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <div style={{ width, height: 5, borderRadius: 3, background: "rgba(255,255,255,0.06)" }}>
-        <div style={{ width: `${pct}%`, height: "100%", borderRadius: 3, background: color, transition: "width 0.5s" }} />
-      </div>
-      <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 12, fontWeight: 600, color, minWidth: 24 }}>{score}</span>
-    </div>
-  );
-}
-
-function RoutingBadge({ routing }: { routing: string }) {
-  const colors: Record<string, string> = { "A-Book": C.red, "Review": C.amber, "B-Book": C.green };
-  return <Badge color={colors[routing] ?? C.t3}>{routing}</Badge>;
-}
+import ScoreBar from "./shared/ScoreBar";
+import RoutingBadge from "./shared/RoutingBadge";
+import { thStyle as sharedTh } from "./shared/TableStyles";
 
 interface ThreatViewProps {
   accounts: Account[];
@@ -62,7 +36,7 @@ function ThreatView({ accounts, version, onSelect }: ThreatViewProps) {
       </div>
     );
   }
-  const thStyle: CSSProperties = { padding: "8px 10px", fontSize: 9, fontFamily: "'JetBrains Mono',monospace", fontWeight: 600, color: C.t3, textAlign: "left", borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: C.bg2, textTransform: "uppercase", letterSpacing: "0.5px" };
+  const localTh: CSSProperties = { ...sharedTh, padding: "8px 10px" };
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ display: "flex", gap: 4, padding: "10px 16px", borderBottom: `1px solid ${C.border}` }}>
@@ -83,12 +57,12 @@ function ThreatView({ accounts, version, onSelect }: ThreatViewProps) {
       </div>
       <div style={{ flex: 1, overflow: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr>{["Login","Name","Score","Ring","Latency","Bonus","Bot","Route","IB","EA"].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr></thead>
+          <thead><tr>{["Login","Name","Score","Ring","Latency","Bonus","Bot","Route","IB","EA"].map(h => <th key={h} style={localTh}>{h}</th>)}</tr></thead>
           <tbody>
-            {filtered.map(acc => (
-              <tr key={acc.login} onClick={() => onSelect(acc)} style={{ cursor: "pointer" }}
+            {filtered.map((acc, idx) => (
+              <tr key={acc.login} onClick={() => onSelect(acc)} style={{ cursor: "pointer", background: idx % 2 === 1 ? "rgba(255,255,255,0.015)" : "transparent" }}
                 onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+                onMouseLeave={e => { e.currentTarget.style.background = idx % 2 === 1 ? "rgba(255,255,255,0.015)" : "transparent"; }}>
                 <td style={{ padding: "7px 10px", fontSize: 12, fontFamily: "'JetBrains Mono',monospace", color: C.t1, borderBottom: `1px solid ${C.border}` }}>{acc.login}</td>
                 <td style={{ padding: "7px 10px", fontSize: 12, color: C.t2, borderBottom: `1px solid ${C.border}` }}>{acc.name}</td>
                 <td style={{ padding: "7px 10px", borderBottom: `1px solid ${C.border}` }}><ScoreBar score={acc.score} width={50} /></td>
@@ -101,7 +75,7 @@ function ThreatView({ accounts, version, onSelect }: ThreatViewProps) {
                         <div style={{ width: 30, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.06)" }}>
                           <div style={{ width: `${v * 100}%`, height: "100%", borderRadius: 2, background: v > 0.5 ? tc : "rgba(255,255,255,0.15)" }} />
                         </div>
-                        <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: v > 0.5 ? tc : C.t3 }}>{(v * 100).toFixed(0)}</span>
+                        <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: v > 0.5 ? tc : C.t3, textAlign: "right" }}>{(v * 100).toFixed(0)}</span>
                       </div>
                     </td>
                   );

@@ -49,10 +49,6 @@ export default function LoginPage() {
       alignItems: "center", justifyContent: "center",
       background: C.bg2, fontFamily: "'DM Sans',system-ui,sans-serif",
     }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-        * { margin:0; padding:0; box-sizing:border-box; }
-      `}</style>
       <div style={card}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
           <div style={{

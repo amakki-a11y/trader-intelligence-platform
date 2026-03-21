@@ -1,27 +1,16 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import type { CSSProperties } from "react";
-import C, { sevColor } from "../styles/colors";
+import C from "../styles/colors";
 import type { Account, LiveEvent } from "../store/TipStore";
 import { parseDealToLiveEvent, parseWsDealToLiveEvent } from "../utils/parsers";
 import { getAccessToken, apiFetch } from "../services/api";
 import type { RawDealResponse } from "../utils/parsers";
+import ScoreBar from "./shared/ScoreBar";
+import { thStyle as sharedTh, tdStyle as sharedTd } from "./shared/TableStyles";
 
 /** Escape special regex characters in user input for safe use in RegExp/filter. */
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function ScoreBar({ score, width = 80 }: { score: number; width?: number }) {
-  const pct = Math.min(100, Math.max(0, score));
-  const color = sevColor(score);
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <div style={{ width, height: 5, borderRadius: 3, background: "rgba(255,255,255,0.06)" }}>
-        <div style={{ width: `${pct}%`, height: "100%", borderRadius: 3, background: color, transition: "width 0.5s" }} />
-      </div>
-      <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 12, fontWeight: 600, color, minWidth: 24 }}>{score}</span>
-    </div>
-  );
 }
 
 interface LiveMonitorProps {
@@ -62,7 +51,6 @@ function LiveMonitor({ accounts, isLive, onSelect }: LiveMonitorProps) {
     });
   }, [events, sortCol, sortDir, filter]);
 
-  // FIX 2: exponential backoff, FIX 3: error logging, FIX 4: AbortController, FIX 5: timer cleanup
   useEffect(() => {
     if (!isLive) {
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
@@ -76,7 +64,6 @@ function LiveMonitor({ accounts, isLive, onSelect }: LiveMonitorProps) {
     const seenIds = new Set<number>();
     const controller = new AbortController();
 
-    // Load recent deal history for scored accounts
     const loadRecent = async () => {
       try {
         const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -115,7 +102,6 @@ function LiveMonitor({ accounts, isLive, onSelect }: LiveMonitorProps) {
     };
     loadRecent();
 
-    // WebSocket for new deals in real-time with exponential backoff
     const connect = () => {
       setWsStatus("connecting");
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -126,7 +112,7 @@ function LiveMonitor({ accounts, isLive, onSelect }: LiveMonitorProps) {
 
       ws.onopen = () => {
         setWsStatus("connected");
-        attempt = 0; // FIX 2: reset on success
+        attempt = 0;
         ws.send(JSON.stringify({ subscribe: ["deals"] }));
       };
 
@@ -150,7 +136,6 @@ function LiveMonitor({ accounts, isLive, onSelect }: LiveMonitorProps) {
       ws.onclose = () => {
         setWsStatus("disconnected");
         wsRef.current = null;
-        // FIX 2: exponential backoff
         const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
         attempt++;
         console.log(`[LiveMonitor WS] reconnect attempt ${attempt} in ${delay}ms`);
@@ -179,16 +164,8 @@ function LiveMonitor({ accounts, isLive, onSelect }: LiveMonitorProps) {
     { key: "profit", label: "Profit", w: 75 },
     { key: "score", label: "Score", w: 80 },
   ];
-  const lmTh: CSSProperties = {
-    padding: "8px 6px", textAlign: "left", fontSize: 9,
-    fontFamily: "'JetBrains Mono',monospace", fontWeight: 600, color: C.t3,
-    borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, background: C.bg2, zIndex: 2,
-    letterSpacing: "0.5px", textTransform: "uppercase", cursor: "pointer",
-  };
-  const lmTd: CSSProperties = {
-    padding: "6px 6px", fontSize: 11, color: C.t2, borderBottom: `1px solid ${C.border}`,
-    fontFamily: "'JetBrains Mono',monospace",
-  };
+  const lmTh: CSSProperties = { ...sharedTh, padding: "8px 6px", cursor: "pointer" };
+  const lmTd: CSSProperties = { ...sharedTd, padding: "6px 6px" };
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -218,28 +195,28 @@ function LiveMonitor({ accounts, isLive, onSelect }: LiveMonitorProps) {
               ))}
             </tr></thead>
             <tbody>
-              {sortedEvents.map(ev => {
+              {sortedEvents.map((ev, idx) => {
                 const entryColor = ev.entry === "Open" ? C.blue : ev.entry === "Close" || ev.entry === "Close By" ? C.amber : ev.entry === "Deposit" ? C.green : ev.entry === "Withdrawal" ? C.red : ev.entry === "Bonus" ? C.purple : C.t3;
                 const isMoney = ev.entry === "Deposit" || ev.entry === "Withdrawal" || ev.entry === "Bonus";
                 return (
                   <tr key={ev.id} onClick={() => { const a = accounts.find(x => x.login === ev.login); if (a) onSelect(a); }}
                     style={{
                       cursor: "pointer",
-                      background: ev.isCorrelated ? "rgba(255,82,82,0.06)" : "transparent",
+                      background: ev.isCorrelated ? "rgba(255,82,82,0.06)" : idx % 2 === 1 ? "rgba(255,255,255,0.015)" : "transparent",
                       transition: "background 0.15s",
                     }}
                     onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = ev.isCorrelated ? "rgba(255,82,82,0.06)" : "transparent"; }}>
+                    onMouseLeave={e => { e.currentTarget.style.background = ev.isCorrelated ? "rgba(255,82,82,0.06)" : idx % 2 === 1 ? "rgba(255,255,255,0.015)" : "transparent"; }}>
                     <td style={{ ...lmTd, fontSize: 10, color: C.t3 }}>{ev.time}</td>
                     <td style={{ ...lmTd, color: C.t1 }}>{ev.login}</td>
                     <td style={{ ...lmTd, color: entryColor, fontWeight: 600, fontSize: 10 }}>{ev.entry || "\u2014"}</td>
                     <td style={{ ...lmTd, color: ev.action === "BUY" ? C.blue : ev.action === "SELL" ? C.red : C.t2 }}>{ev.action}</td>
                     <td style={lmTd}>{ev.symbol}</td>
-                    <td style={{ ...lmTd, fontWeight: isMoney ? 600 : 400, color: isMoney ? (ev.profit >= 0 ? C.green : C.red) : C.t2 }}>
+                    <td style={{ ...lmTd, fontWeight: isMoney ? 600 : 400, color: isMoney ? (ev.profit >= 0 ? C.green : C.red) : C.t2, textAlign: "right" }}>
                       {isMoney ? `${ev.profit >= 0 ? "+" : ""}${ev.profit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ev.volume}
                     </td>
-                    <td style={{ ...lmTd, color: C.t3 }}>{!isMoney && ev.price ? ev.price : ""}</td>
-                    <td style={{ ...lmTd, color: !isMoney ? (ev.profit >= 0 ? C.green : C.red) : C.t3 }}>
+                    <td style={{ ...lmTd, color: C.t3, textAlign: "right" }}>{!isMoney && ev.price ? ev.price : ""}</td>
+                    <td style={{ ...lmTd, color: !isMoney ? (ev.profit >= 0 ? C.green : C.red) : C.t3, textAlign: "right" }}>
                       {!isMoney && ev.profit ? `${ev.profit >= 0 ? "+" : ""}${ev.profit.toFixed(2)}` : ""}
                     </td>
                     <td style={lmTd}>

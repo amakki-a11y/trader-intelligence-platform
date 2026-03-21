@@ -1,17 +1,8 @@
-import type { ReactNode } from "react";
+import { useRef, useEffect } from "react";
+import type { CSSProperties } from "react";
 import C, { sevColor } from "../../styles/colors";
 import type { Account } from "../../store/TipStore";
-
-function Badge({ color, children, small }: { color: string; children: ReactNode; small?: boolean }) {
-  return (
-    <span style={{
-      display: "inline-block", fontFamily: "'JetBrains Mono',monospace",
-      fontSize: small ? 9 : 10, fontWeight: 600, letterSpacing: "0.5px",
-      color, background: color + "14", border: `1px solid ${color}40`,
-      borderRadius: 4, padding: small ? "1px 6px" : "2px 8px",
-    }}>{children}</span>
-  );
-}
+import Badge from "../shared/Badge";
 
 interface TopBarProps {
   view: string;
@@ -25,6 +16,20 @@ interface TopBarProps {
 function TopBar({ view, accounts, isLive, onToggleLive, onScan, scanning }: TopBarProps) {
   const critCount = accounts.filter(a => a.sev === "CRITICAL").length;
   const highCount = accounts.filter(a => a.sev === "HIGH").length;
+  const prevCritRef = useRef(critCount);
+  const critBadgeRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (critCount !== prevCritRef.current && critBadgeRef.current) {
+      const el = critBadgeRef.current;
+      el.style.transform = "scale(1.25)";
+      const timer = setTimeout(() => { el.style.transform = "scale(1)"; }, 250);
+      prevCritRef.current = critCount;
+      return () => clearTimeout(timer);
+    }
+    prevCritRef.current = critCount;
+  }, [critCount]);
+
   const titles: Record<string, string> = {
     grid: "Account Scanner", live: "Live Monitor", market: "Market Watch",
     threats: "Threat Intelligence", settings: "Settings",
@@ -42,7 +47,9 @@ function TopBar({ view, accounts, isLive, onToggleLive, onScan, scanning }: TopB
         <span style={{ fontSize: 11, color: C.t3, fontFamily: "'JetBrains Mono',monospace" }}>
           {accounts.length} accounts
         </span>
-        <Badge color={sevColor(70)}>{critCount} CRIT</Badge>
+        <span ref={critBadgeRef} style={{ transition: "transform 0.25s ease-out", display: "inline-block" } as CSSProperties}>
+          <Badge color={sevColor(70)}>{critCount} CRIT</Badge>
+        </span>
         <Badge color={sevColor(50)}>{highCount} HIGH</Badge>
       </div>
       {view === "live" && (
@@ -67,5 +74,4 @@ function TopBar({ view, accounts, isLive, onToggleLive, onScan, scanning }: TopB
   );
 }
 
-export { Badge };
 export default TopBar;
