@@ -284,8 +284,8 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
   const totalOpenSwap = openTrades.reduce((s, t) => s + t.swap, 0);
   const floatingPnl = totalOpenPnl + totalOpenSwap;
 
-  // Live equity = balance + floating P&L (balance from initial load, P&L from WebSocket)
-  const liveEquity = acctInfo.balance + floatingPnl;
+  // Live equity = balance + credit + floating P&L (MT5 formula)
+  const liveEquity = acctInfo.balance + acctInfo.credit + floatingPnl;
   const liveFreeMargin = liveEquity - acctInfo.margin;
   const marginLevel = acctInfo.margin > 0 ? ((liveEquity / acctInfo.margin) * 100) : 0;
 
