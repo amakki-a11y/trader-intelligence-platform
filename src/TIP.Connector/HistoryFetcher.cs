@@ -92,10 +92,14 @@ public sealed class HistoryFetcher : IDisposable
             await _concurrencyLimiter.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                // Check sync state for last checkpoint; default to 90 days back
-                var lastSync = _syncTracker.GetLastSyncTimestamp(SyncStateTracker.EntityType.DealLogin, login.ToString());
-                var from = lastSync ?? cutoffTime.AddDays(-90);
-                var to = cutoffTime;
+                // Full history backfill: request ALL deals from epoch to future.
+                // - "from" uses 2020-01-01 to cover any account's complete history.
+                // - "to" uses NOW + 1 day to compensate for MT5 server time offsets
+                //   (some MT5 servers use GMT+2/+3, others UTC).
+                // - DB uses ON CONFLICT DO NOTHING so duplicates are safe.
+                // - This guarantees zero missed deals between backend restarts.
+                var from = new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero);
+                var to = DateTimeOffset.UtcNow.AddDays(1);
 
                 IReadOnlyList<RawDeal> rawDeals;
                 try
