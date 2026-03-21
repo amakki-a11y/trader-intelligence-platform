@@ -389,6 +389,7 @@ function AccountDetail({ account, version, onBack }: AccountDetailProps) {
             { label: "Volume", val: totalVolume.toLocaleString(undefined, { maximumFractionDigits: 2 }) + " lots", color: C.t1 },
             { label: "Commissions", val: "$" + Math.abs(totalComm).toLocaleString(undefined, { maximumFractionDigits: 2 }), color: C.amber },
             { label: "Net P&L", val: (netPnl >= 0 ? "+$" : "-$") + Math.abs(netPnl).toLocaleString(undefined, { maximumFractionDigits: 2 }), color: netPnl >= 0 ? C.green : C.red },
+            { label: "Total P&L", val: ((netPnl + totalComm) >= 0 ? "+$" : "-$") + Math.abs(netPnl + totalComm).toLocaleString(undefined, { maximumFractionDigits: 2 }), color: (netPnl + totalComm) >= 0 ? C.green : C.red },
             { label: "Deposits", val: depositOps.length + "\u00D7 ($" + totalDeposited.toLocaleString(undefined, { maximumFractionDigits: 0 }) + ")", color: C.t1 },
             { label: "Bonuses", val: "$" + totalBonuses.toLocaleString(undefined, { maximumFractionDigits: 2 }), color: C.amber },
             { label: "EA Trade %", val: (eaRatio * 100).toFixed(0) + "%", color: eaRatio > 0.8 ? C.coral : C.t1 },
